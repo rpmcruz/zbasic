@@ -1,0 +1,119 @@
+Copied ZBasic declarations of functions for the Macintosh, from the book ZBasic, Interactive Basic compiler. -- Ricardo
+
+APPEND [#]filenumber
+	appends to file
+APPLE MENU simplestring
+	creates an entry under the special Mac menu item
+BLOCK MOVE source& destination& byte
+	copy memory
+BREAK ON / OFF / STOP
+	development
+BUNDLE status
+	development
+BUTTON (button number)
+
+
+TODO:
+	check if selected (below) means pressed or that simply that it has the focus
+	(assuming the latter currently.)
+
+
+
+	returns state of button
+	returns:
+		0 - not active (gray)
+		1 - active but not selected
+		2 - active and selected
+BUTTON [#] button number, condition [, title$, (x1,y1)-(x2,y2) [, type]]
+
+
+CHECK: if x1,y1,x2,y2 not passed -- what do we assume?
+
+
+	creates button
+	condition:
+		0 - not active (gray=
+		1 - active but not selected
+		2 - active and selected
+	type:
+		1 - push button
+		2 - check box
+		3 - radio button
+CALL variable& [(expression, [expression, ...])]
+	goto variable address and pushes expressions to the stack (used as members)
+CLEAR LPRINT
+	ends printing page (or section)
+[L]COMPILE
+	development
+CREATOR[=] "ffff"
+	development
+CURSOR[=] expression
+	changes cursor
+	expression:
+		0 - normal cursor
+		1 - text cursor
+		2 - selection (cross) cursor
+		3 - excell (cross) cursor
+		4 - watch (wait)
+	SETCURSOR (integer array%)
+		creates your own cursor image
+		0-15 cursor data, 16-31 mask data, 32 x hotspot, 33 y hotspot
+	INITCURSOR
+		reset
+	HIDECURSOR
+		hide
+	SHOWCURSOR
+		show
+	OBSCURECURSOR
+		hide until mouse moved
+	CHndl = FN GETCURSOR (id)
+		returns memory pointer
+	SHIELDCURSOR (Rect, Point)
+		hide cursor if in rectangle area
+DEFDBL INT alpha, alpha range -alpha range
+	advanced stuff
+DEF LPRINT
+	pops up print dialog (and initialized the print system)
+DEF MOUSE [=] n
+	n:
+		= 0 - ZBasic mouse syntax
+		<> 0 - MSBASIC compatibility syntax
+DEF OPEN [=] "ffffcccc"
+	open file; must then call OPEN to fseek
+DEF PAGE
+	page formatting tool dialog
+DEFSTR LONG
+DEFSTR WORD
+	expert stuff; affects a couple of functions
+DIALOG (expression)
+	returns current event in the buffer (FIFO style)
+
+	returns (if expression = 0):
+		0 - no event
+		1 - button
+		2 - edit field
+		3 - window changed
+		4 - window closed		
+		5 - window update
+		6 - return key
+		7 - tab key
+		8 - zoom-in
+		9 - zoom-out
+		10 - shift-tab
+		11 - clear tab
+		12 - left arrow
+		13 - right arrow
+		14 - up arrow
+		15 - down arrow
+		16 - other key
+
+	returns the id (if expression = 1):
+		0 - returns event type
+		1 - button clicked
+		2 - edit field clicked
+		3 - inactive window clicked
+		4 - window closed
+		5 - window erased
+		6 - edit field where return pressed
+		7 - edit field where tab pressed
+
