@@ -1,4 +1,4 @@
-start = statements:statement* EOF { return statements; }
+start = statements
 statements
   = statement:statement EOF { return [statement]; }
   / statement:statement newline statements:statements { return [statement] + statements; }
@@ -19,7 +19,7 @@ dims
 
 dtype
   = "%" / "&" { return "int"; }
-  / "!" / "#" { return "float"; }
+  / "!" / "#" { return "real"; }
   / "$" { return "string"; }
 
 parameters
