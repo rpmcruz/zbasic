@@ -1,19 +1,21 @@
 start = statements
 statements
-  = statement:statement EOF { return [statement]; }
-  / statement:statement newline statements:statements { return [statement] + statements; }
-  / statement:statement optional_whitespace ":" optional_whitespace statements:statements { return [statement] + statements; }
+  = statement:statement EOF { console.log('EOF'); return [statement]; }
+  / statement:statement newline statements:statements { console.log("new line, statement: " + (typeof statement) + " statements: " + (typeof statement)); return [statement].concat(statements); }
+  / statement:statement optional_whitespace ":" optional_whitespace statements:statements { console.log("colon, statement: " + (typeof statement) + " statements: " + (typeof statement)); return [statement].concat(statements); }
 
-statement = dim_statement / call_statement
+statement
+    = s:dim_statement { console.log("statement dim"); return s; }
+    / s:call_statement { console.log("statement call"); return s; }
 
 dim_statement
-  = "DIM" mandatory_whitespace name:name dtype:dtype shape:shape { return {cmd: "DIM", parameters: {name, dtype, shape}}; }
+  = "DIM" mandatory_whitespace name:name dtype:dtype shape:shape { console.log("return DIM dict with name " + name); return {cmd: "DIM", parameters: {name, dtype, shape}}; }
 
-call_statement = name:name mandatory_whitespace parameters:parameters { return {cmd: name, parameters}; }
+call_statement = name:name mandatory_whitespace parameters:parameters { console.log("return call dict"); return {cmd: name, parameters}; }
 
 shape = "(" dims:dims ")" { return dims; }
 dims
-  = integer:integer "," dims:dims { return [integer] + dims; }
+  = integer:integer "," dims:dims { return [integer].concat(dims); }
   / integer:integer { return [integer]; }
   / "" { return []; }
 
@@ -23,7 +25,7 @@ dtype
   / "$" { return "string"; }
 
 parameters
-  = parameter:parameter optional_whitespace "," optional_whitespace parameters:parameters { return [parameter] + parameters; }
+  = parameter:parameter optional_whitespace "," optional_whitespace parameters:parameters { return [parameter].concat(parameters); }
   / parameter:parameter { return [parameter]; }
   / "" { return []; }
 
