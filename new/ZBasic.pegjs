@@ -7,7 +7,7 @@ statements
 statement = dim_statement / call_statement
 
 dim_statement
-  = "DIM" mandatory_whitespace name:name dtype:dtype shape:shape { return {cmd: "DIM", name, dtype, shape}; }
+  = "DIM" mandatory_whitespace name:name dtype:dtype shape:shape { return {cmd: "DIM", parameters: {name, dtype, shape}}; }
 
 call_statement = name:name mandatory_whitespace parameters:parameters { return {cmd: name, parameters}; }
 
