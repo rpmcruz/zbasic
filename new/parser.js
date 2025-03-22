@@ -6,7 +6,8 @@ const grammar = fs.readFileSync("ZBasic.pegjs", "utf8");
 const parser = peg.generate(grammar);
 
 // ZBasic code to parse
-const code = 'DIM X&(10):PRINT "Hello"';
+const code = fs.readFileSync('pthy1.1.txt', 'utf8');
+console.log(code);
 
 // Parse and print the result
 try {
