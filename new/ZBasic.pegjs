@@ -1,25 +1,23 @@
-// low-level
-force_space = " "+
-opt_space = " "*
+start = expression
+
+//////////////////////// low-level ////////////////////////
+
+_ = " "*
 newline = [\n\r]+
 EOF = !.
-
-// generic values
 integer = [0-9]+ { return parseInt(text()); }
-name = [a-zA-Z_][a-zA-Z0-9_]* { return text(); }
+real = [0-9]+ "." [0-9]+ { return parseFloat(text()); }
+name = [a-zA-Z_][a-zA-Z0-9_]*
+literal = "\"" [^\"]* "\""
 
-// leaf values
-constant_int = i:integer { return {type: 'integer', value: i}; }
-constant_real = [0-9]+.[0-9]+ { return {type: 'real',  value: parseFloat(text())}; }
-literal = "\"" chars:[^\"]* "\"" { return {type: 'literal', value: chars.join("")}; }
-variable = v:name { return {type: 'variable', value: v}; }
-value = constant_int / constant_real / literal / variable
+//////////////////////// expressions ////////////////////////
 
-// expression: composition of values
 binary_op = "+" / "-" / "*" / "/" / "<=" / ">=" / "<" / ">" / "==" / "!=" / ">>"
-expression = v:value opt_space op:binary_op opt_space e:expression { return {cmd: op, params: [v, e]}; }
+value = real / integer / name / literal
+expression = e1:value _ op:binary_op _ e2:expression { return {op, e1, e2}; } / v:value
 
-// statement: composition of expression
+//////////////////////// statements ////////////////////////
+
 statements
   = statement:statement EOF { return [statement]; }
   / statement:statement newline statements:statements { return [statement].concat(statements); }
