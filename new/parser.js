@@ -6,8 +6,11 @@ const grammar = fs.readFileSync("ZBasic.pegjs", "utf8");
 const parser = peg.generate(grammar);
 
 // ZBasic code to parse
-const code = fs.readFileSync('pthy1.1.txt', 'utf8');
-console.log(code);
+//const code = fs.readFileSync('pthy1.1.txt', 'utf8');
+//const code = 'REM:***Price Theory Programs Ver 1.1, May 2, 1991***';
+const code = `REM This is a comment
+DIM X&(10) ' Another comment
+PRINT "Hello"`
 
 // Parse and print the result
 try {
