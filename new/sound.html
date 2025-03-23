@@ -1,0 +1,26 @@
+<html>
+<body>
+    <button onclick="playSound(396, 70, 150)">Play Sound</button>
+    <script>
+        function playSound(frequency, duration, volume = 255) {
+            const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            const oscillator = audioCtx.createOscillator();
+            const gainNode = audioCtx.createGain();
+
+            oscillator.type = "sine"; // Simple sine wave
+            oscillator.frequency.value = frequency;
+
+            gainNode.gain.value = volume / 255; // Normalize volume (0-255 range)
+
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+
+            oscillator.start();
+            setTimeout(() => {
+                oscillator.stop();
+                audioCtx.close();
+            }, duration);
+        }
+    </script>
+</body>
+</html>
