@@ -1,51 +1,67 @@
-start = expression
-
-//////////////////////// low-level ////////////////////////
-
-_ = " "*
-newline = [\n\r]+
-EOF = !.
-integer = [0-9]+ { return parseInt(text()); }
-real = [0-9]+ "." [0-9]+ { return parseFloat(text()); }
-name = [a-zA-Z_][a-zA-Z0-9_]*
-literal = "\"" [^\"]* "\""
-
-//////////////////////// expressions ////////////////////////
-
-binary_op = "+" / "-" / "*" / "/" / "<=" / ">=" / "<" / ">" / "==" / "!=" / ">>"
-value = real / integer / name / literal
-expression = e1:value _ op:binary_op _ e2:expression { return {op, e1, e2}; } / v:value
+start = _ statements:statements _ EOF { return statements; }
 
 //////////////////////// statements ////////////////////////
 
 statements
-  = statement:statement EOF { return [statement]; }
-  / statement:statement newline statements:statements { return [statement].concat(statements); }
-  / statement:statement opt_space ":" opt_space statements:statements { return [statement].concat(statements); }
-  / comment { return null; }
+  = head:statement tail:(_ separator _ statement)* {
+      return [head, ...tail.map(t => t[3])];
+    }
+separator = ":" / newline
 
-comment = ("REM" / "'") [^\n]* newline? { return null; }
-statement = dim_statement / call_statement
-dim_statement
-  = "DIM" force_space memsize:integer force_space name:name dtype:dtype shape:shape { return {cmd: "DIM", params: {name, dtype, shape}}; }
-  / "DIM" force_space name:name dtype:dtype shape:shape { return {cmd: "DIM", params: {name, dtype, shape}}; }
-  / "DIM" force_space name:name dtype:dtype { return {cmd: "DIM", params: {name, dtype, shape: []}}; }
-  / "DIM" force_space name:name shape:shape { return {cmd: "DIM", params: {name, dtype: "integer", shape}}; }
-  / "DIM" force_space name:name { return {cmd: "DIM", params: {name, dtype: "integer", shape: []}}; }
-shape = "(" dims:dims ")" { return dims; }
-dims
-  = integer:integer "," dims:dims { return [integer].concat(dims); }
-  / integer:integer { return [integer]; }
-  / "" { return []; }
+statement
+  = declaration
+  / functionCall
+
+declaration
+  = "DIM"i _
+    sizePart:("(" _ size:number _ ")")?
+    _ name:identifier 
+    dtypePart:dtype?
+    _ dimsPart:("(" _ dims:dimensions _ ")")?
+    { return {type: "declaration", name, size: sizePart ? sizePart[2] : null, dtype: dtypePart !== null ? dtypePart : "int", dimensions: dimsPart ? dimsPart[2] : []}; }
+functionCall
+  = name:identifier _ "(" _ args:arguments? _ ")"
+    { return {type: "functionCall", name, args: args || []};}
+arguments
+  = head:expression tail:(_ "," _ expression)* {return [head, ...tail.map(t => t[3])];}
+dimensions = arguments  // same format as args
 dtype
   = "%" / "&" { return "int"; }
   / "!" / "#" { return "real"; }
   / "$" { return "string"; }
-call_statement = name:name force_space params:params { return {cmd: name, params}; }
-params
-  = v:value opt_space "," opt_space params:params { return [v].concat(params); }
-  / v:value { return [v]; }
-  / "" { return []; }
 
-// start
-start = statements
+//////////////////////// expressions ////////////////////////
+
+expression = concat
+concat = left:shift _ "&" _ right:concat { return {type: "binary", operator: "&", left, right}; }
+  / shift
+shift = left:additive _ "<<" _ right:shift { return {type: "binary", operator: "<<", left, right}; }
+  / additive
+additive = left:multiplicative _ op:("+" / "-") _ right:additive { return {type: "binary", operator: op, left, right}; }
+  / multiplicative
+multiplicative = left:primary _ op:("*" / "/") _ right:multiplicative { return {type: "binary", operator: op, left, right}; }
+  / primary
+primary = string / float / integer / variable
+  / "(" _ expr:expression _ ")" { return expr; }
+
+//////////////////////// mid-level ////////////////////////
+
+identifier = [a-zA-Z_][a-zA-Z0-9_]* { return text(); }
+number = digits:[0-9]+ { return parseInt(digits.join(""), 10); }
+string = '"' chars:char* '"' { return {type: "string", value: chars.join("")}; }
+integer = digits:[0-9]+ { return {type: "number", value: parseInt(digits.join(""), 10)}; }
+boolean = "True" { return {type: "number", value: true}; }
+  / "False" { return {type: "number", value: false}; }
+float = int:[0-9]+ "." frac:[0-9]+ { return {type: "number", value: parseFloat(int.join("") + "." + frac.join(""))}; }
+variable = name:identifier { return {type: "variable", name}; }
+char = ('\\' ['"\\']) / (!'"' .)
+
+//////////////////////// low-level ////////////////////////
+
+newline = "\r\n" / "\n" / "\r"
+comment = ("REM"i / "'") (!newline .)*
+// optional whitespace or comments
+_  = (white / comment)*
+__ = white+
+white = [ \t]+
+EOF = !.
