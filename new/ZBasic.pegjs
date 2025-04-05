@@ -2,28 +2,24 @@ start = _ statements:statements _ EOF { return statements; }
 
 //////////////////////// statements ////////////////////////
 
-statements
-  = head:statement tail:(_ separator _ statement)* {
-      return [head, ...tail.map(t => t[3])];
-    }
+statements = head:statement tail:(_ separator _ statement)*
+  { return [head, ...tail.map(t => t[3])]; }
 separator = ":" / newline
 
 statement
   = declaration
   / functionCall
 
-declaration
-  = "DIM"i _
-    sizePart:("(" _ size:number _ ")")?
-    _ name:identifier 
-    dtypePart:dtype?
-    _ dimsPart:("(" _ dims:dimensions _ ")")?
-    { return {type: "declaration", name, size: sizePart ? sizePart[2] : null, dtype: dtypePart !== null ? dtypePart : "int", dimensions: dimsPart ? dimsPart[2] : []}; }
-functionCall
-  = name:identifier _ "(" _ args:arguments? _ ")"
-    { return {type: "functionCall", name, args: args || []};}
-arguments
-  = head:expression tail:(_ "," _ expression)* {return [head, ...tail.map(t => t[3])];}
+declaration = "DIM"i _
+  sizePart:("(" _ size:number _ ")")?
+  _ name:identifier 
+  dtypePart:dtype?
+  _ dimsPart:("(" _ dims:dimensions _ ")")?
+  { return {type: "declaration", name, size: sizePart ? sizePart[2] : null, dtype: dtypePart !== null ? dtypePart : "int", dimensions: dimsPart ? dimsPart[2] : []}; }
+functionCall = name:identifier _ "(" _ args:arguments? _ ")"
+  { return {type: "functionCall", name, args: args || []};}
+arguments = head:expression tail:(_ "," _ expression)*
+  {return [head, ...tail.map(t => t[3])];}
 dimensions = arguments  // same format as args
 dtype
   = "%" / "&" { return "int"; }
@@ -63,5 +59,5 @@ comment = ("REM"i / "'") (!newline .)*
 // optional whitespace or comments
 _  = (white / comment)*
 __ = white+
-white = [ \t]+
+white = [ \t\n\r]+
 EOF = !.

@@ -1,2 +1,7 @@
 REM:***Price Theory Programs Ver 1.1, May 2, 1991***
+REM:***Written by David D. Friedman***
+
+'Problems: Add cancel printing option? SW says laser printing problem. ???
+'Axis tool line sometimes leaves one black dot on axis.
+
 f(5)
