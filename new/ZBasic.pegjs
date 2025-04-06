@@ -9,8 +9,10 @@ separator = ":" / newline
 statement
   = declaration
   / functionCall
+  / coordinate
+  / definition
 
-declaration = "DIM"i _
+declaration = "DIM" _
   sizePart:("(" _ size:number _ ")")?
   _ name:identifier 
   dtypePart:dtype?
@@ -25,6 +27,9 @@ dtype
   = "%" / "&" { return "int"; }
   / "!" / "#" { return "real"; }
   / "$" { return "string"; }
+coordinate = "COORDINATE" _ "WINDOW" { return {type: "coordinate", horizontal: 0, vertical: 0}; }
+  / "COORDINATE" _ horizontal:number "," vertical:number { return {type: "coordinate", horizontal, vertical}; }
+definition = "DEF" _ variable:identifier _ "=" _ value:integer { return {type: "definition", variable, value}; }
 
 //////////////////////// expressions ////////////////////////
 
@@ -55,7 +60,7 @@ char = ('\\' ['"\\']) / (!'"' .)
 //////////////////////// low-level ////////////////////////
 
 newline = "\r\n" / "\n" / "\r"
-comment = ("REM"i / "'") (!newline .)*
+comment = ("REM" / "'") (!newline .)*
 // optional whitespace or comments
 _  = (white / comment)*
 __ = white+
