@@ -10,22 +10,24 @@ statement
   / functionCall
   / coordinate
   / definition
+  / goto
 
-declaration = "DIM" _ head:dimsPart tail:(_ "," _ dimsPart)*
+declaration = "DIM" __ head:dimsPart tail:(_ "," _ dimsPart)*
   { return [head, ...tail.map(t => t[3])]; }
 dimsPart =
   sizePart:(_ number _)?
   name:identifier _
   dimsPart:("(" _ dims:dimensions _ ")")?
-  { return {type: "declaration", name, dtype: "!#".includes(name[name.length-1]) ? "float" :  "$" == name[name.length-1] ? "string" : "int", size: sizePart ? sizePart[2] : null, dimensions: dimsPart ? dimsPart[2] : []}; }
+  { return {type: "declaration", name, dtype: "!#".includes(name[name.length-1]) ? "float" :  "$" == name[name.length-1] ? "string" : "int", size: sizePart ? sizePart[1] : null, dimensions: dimsPart ? dimsPart[2] : []}; }
 functionCall = name:identifier _ "(" _ args:arguments? _ ")"
   { return {type: "functionCall", name, args: args || []};}
 arguments = head:expression tail:(_ "," _ expression)*
   { return [head, ...tail.map(t => t[3])]; }
 dimensions = arguments  // same format as args
-coordinate = "COORDINATE" _ "WINDOW" { return {type: "coordinate", horizontal: 0, vertical: 0}; }
-  / "COORDINATE" _ horizontal:number "," vertical:number { return {type: "coordinate", horizontal, vertical}; }
-definition = "DEF" _ variable:identifier valuePart:(_ "=" _ integer)? { return {type: "definition", variable, value: valuePart ? valuePart[3] : null}; }
+coordinate = "COORDINATE" __ "WINDOW" { return {type: "coordinate", horizontal: 0, vertical: 0}; }
+  / "COORDINATE" __ horizontal:number "," vertical:number { return {type: "coordinate", horizontal, vertical}; }
+definition = "DEF" __ variable:identifier valuePart:(_ "=" _ integer)? { return {type: "definition", variable, value: valuePart ? valuePart[3] : null}; }
+goto = "GOTO" __ "\"" id:identifier "\"" { return {type: "goto", label: id}; }
 
 //////////////////////// expressions ////////////////////////
 
