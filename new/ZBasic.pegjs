@@ -1,4 +1,4 @@
-start = _ statements:statements _ EOF { return statements; }
+start = _ statements:statements? _ EOF { return statements; }
 
 //////////////////////// statements ////////////////////////
 
@@ -13,23 +13,18 @@ statement
   / definition
 
 declaration = "DIM" _
-  sizePart:("(" _ size:number _ ")")?
-  _ name:identifier 
-  dtypePart:dtype?
+  sizePart:("(" _ number _ ")")?
+  _ name:identifier
   _ dimsPart:("(" _ dims:dimensions _ ")")?
-  { return {type: "declaration", name, size: sizePart ? sizePart[2] : null, dtype: dtypePart !== null ? dtypePart : "int", dimensions: dimsPart ? dimsPart[2] : []}; }
+  { return {type: "declaration", name, dtype: "!#".includes(name[name.length-1]) ? "float" :  "$" == name[name.length-1] ? "string" : "int", size: sizePart ? sizePart[2] : null, dimensions: dimsPart ? dimsPart[2] : []}; }
 functionCall = name:identifier _ "(" _ args:arguments? _ ")"
   { return {type: "functionCall", name, args: args || []};}
 arguments = head:expression tail:(_ "," _ expression)*
-  {return [head, ...tail.map(t => t[3])];}
+  { return [head, ...tail.map(t => t[3])]; }
 dimensions = arguments  // same format as args
-dtype
-  = "%" / "&" { return "int"; }
-  / "!" / "#" { return "real"; }
-  / "$" { return "string"; }
 coordinate = "COORDINATE" _ "WINDOW" { return {type: "coordinate", horizontal: 0, vertical: 0}; }
   / "COORDINATE" _ horizontal:number "," vertical:number { return {type: "coordinate", horizontal, vertical}; }
-definition = "DEF" _ variable:identifier _ "=" _ value:integer { return {type: "definition", variable, value}; }
+definition = "DEF" _ variable:identifier valuePart:(_ "=" _ integer)? { return {type: "definition", variable, value: valuePart ? valuePart[3] : null}; }
 
 //////////////////////// expressions ////////////////////////
 
@@ -47,7 +42,7 @@ primary = string / float / integer / variable
 
 //////////////////////// mid-level ////////////////////////
 
-identifier = [a-zA-Z_][a-zA-Z0-9_]* { return text(); }
+identifier = [a-zA-Z_][a-zA-Z0-9_]*([%&!#$])? { return text(); }
 number = digits:[0-9]+ { return parseInt(digits.join(""), 10); }
 string = '"' chars:char* '"' { return {type: "string", value: chars.join("")}; }
 integer = digits:[0-9]+ { return {type: "number", value: parseInt(digits.join(""), 10)}; }
