@@ -1,14 +1,9 @@
-start = _ statements:statements? _ EOF { return statements; }
+start = stmts:(_ separator _ statement?)* _ EOF {
+  return stmts.flatMap(t => Array.isArray(t[3]) ? t[3] : [t[3]])
+    .filter(s => s !== null && s !== undefined); }
+separator = ":" / newline
 
 //////////////////////// statements ////////////////////////
-
-statements = head:statement tail:(_ separator* _ statement)*
-  // convert things like "DIM a,b" to multiple statements like "DIM a : DIM b"
-  { return [
-    ...(head ? (Array.isArray(head) ? head : [head]) : []),
-    ...tail.flatMap(t => Array.isArray(t[3]) ? t[3] : [t[3]])
-  ]; }
-separator = ":" / newline
 
 statement
   = declaration
@@ -65,5 +60,5 @@ comment = ("REM" / "'") (!newline .)* (newline / EOF)
 // optional whitespace or comments
 _  = (white / comment)*
 __ = white+
-white = [ \t\r\n]+
+white = [ \t]+
 EOF = !.
