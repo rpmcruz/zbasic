@@ -1,46 +1,111 @@
-start = stmts:(_ separator _ statement?)* _ EOF {
-  return stmts.flatMap(t => Array.isArray(t[3]) ? t[3] : [t[3]])
-    .filter(s => s !== null && s !== undefined); }
-separator = ":" / newline
+start = scope EOF
+scope = stmts:(statement? _ separator _)*
 
-//////////////////////// statements ////////////////////////
+separator = ":" / newline / comment
+statement = assignment
+  / functionDefinition
+  / forLoop
+  / ifStatement
+  / returnStatement
+  / comment / definition / syscall / functionCall
 
-statement
-  = declaration
-  / functionCall
-  / coordinate
-  / definition
-  / goto
+syscall = [A-Z]+ __ params
+functionCall
+  = name:identifier _ "(" _ args:funcArgs? _ ")" {
+      return { type: "functionCall", name, args: args || [] };
+    }
+definition = "DEF" __ name:identifier __ "=" __ value:expression
+  { return { cmd: "DEF", name, value }; }
 
-declaration = "DIM" __ head:dimsPart tail:(_ "," _ dimsPart)*
-  { return [head, ...tail.map(t => t[3])]; }
-dimsPart =
-  sizePart:(_ number _)?
-  name:identifier _
-  dimsPart:("(" _ dims:dimensions _ ")")?
-  { return {type: "declaration", name, dtype: "!#".includes(name[name.length-1]) ? "float" :  "$" == name[name.length-1] ? "string" : "int", size: sizePart ? sizePart[1] : null, dimensions: dimsPart ? dimsPart[2] : []}; }
-functionCall = name:identifier _ "(" _ args:arguments? _ ")"
-  { return {type: "functionCall", name, args: args || []};}
-arguments = head:expression tail:(_ "," _ expression)*
-  { return [head, ...tail.map(t => t[3])]; }
-dimensions = arguments  // same format as args
-coordinate = "COORDINATE" __ "WINDOW" { return {type: "coordinate", horizontal: 0, vertical: 0}; }
-  / "COORDINATE" __ horizontal:number "," vertical:number { return {type: "coordinate", horizontal, vertical}; }
-definition = "DEF" __ variable:identifier valuePart:(_ "=" _ integer)? { return {type: "definition", variable, value: valuePart ? valuePart[3] : null}; }
-goto = "GOTO" __ "\"" id:identifier "\"" { return {type: "goto", label: id}; }
+assignment = variable __ "=" __ expression
+
+funcArgs
+  = head:expression tail:(_ "," _ expression)* {
+      return [head, ...tail.map(t => t[3])];
+    }
+
+params = first:param rest:(_ "," _ param)* {
+  return [first, ...rest.map(r => r[3])];
+}
+param = vardim / line / expression
+vardim = (number __)? identifier ("(" params ")")?
+line = "(" number "," number ")-(" number "," number ")"
+
+functionDefinition
+  = long:"LONG" __ "FN" __ name:identifier
+    (_ "(" _ args:funcArgs _ ")")? _ separator
+    statements:scope
+    _ "END" __ "FN" {
+      return { type: "function", name, args: args || [], statements };
+    }
+ifStatement
+  = "IF" __ cond:expression __ "THEN" __ action:statement {
+      return { type: "if", condition: cond, action };
+    }
+returnStatement = "RETURN" { return { type: "return" }; }
+
+forLoop
+  = "FOR" __ variable:identifier _ "=" _ start:expression _ "TO" _ end:expression _ separator
+    body:scope
+    _ "NEXT" __ endVar:identifier {
+      return {
+        type: "for",
+        variable,
+        start,
+        end,
+        body,
+        endVar
+      };
+    }
 
 //////////////////////// expressions ////////////////////////
 
-expression = concat
-concat = left:shift _ "&" _ right:concat { return {type: "binary", operator: "&", left, right}; }
+expression = logicalOr
+
+logicalOr
+  = left:logicalAnd _ "OR"i _ right:logicalOr
+    { return { type: "binary", operator: "OR", left, right }; }
+  / logicalAnd
+
+logicalAnd
+  = left:not _ "AND"i _ right:logicalAnd
+    { return { type: "binary", operator: "AND", left, right }; }
+  / not
+
+not
+  = "NOT"i _ expr:not
+    { return { type: "unary", operator: "NOT", expression: expr }; }
+  / comparison
+
+comparison
+  = left:concat _ op:compOp _ right:comparison
+    { return { type: "binary", operator: op, left, right }; }
+  / concat
+
+compOp = "=" / "<>" / "<=" / ">=" / "<" / ">"
+
+concat
+  = left:shift _ "&" _ right:concat
+    { return { type: "binary", operator: "&", left, right }; }
   / shift
-shift = left:additive _ "<<" _ right:shift { return {type: "binary", operator: "<<", left, right}; }
+
+shift
+  = left:additive _ "<<" _ right:shift
+    { return { type: "binary", operator: "<<", left, right }; }
   / additive
-additive = left:multiplicative _ op:("+" / "-") _ right:additive { return {type: "binary", operator: op, left, right}; }
+
+additive
+  = left:multiplicative _ op:("+" / "-") _ right:additive
+    { return { type: "binary", operator: op, left, right }; }
   / multiplicative
-multiplicative = left:primary _ op:("*" / "/") _ right:multiplicative { return {type: "binary", operator: op, left, right}; }
+
+multiplicative
+  = left:primary _ op:("*" / "/") _ right:multiplicative
+    { return { type: "binary", operator: op, left, right }; }
   / primary
-primary = string / float / integer / variable
+
+primary
+  = functionCall / string / float / integer / variable
   / "(" _ expr:expression _ ")" { return expr; }
 
 //////////////////////// mid-level ////////////////////////
@@ -58,9 +123,8 @@ char = ('\\' ['"\\']) / (!'"' .)
 //////////////////////// low-level ////////////////////////
 
 newline = "\r\n" / "\n" / "\r"
-comment = ("REM" / "'") (!newline .)* (newline / EOF)
-// optional whitespace or comments
-_  = (white / comment)*
-__ = white+
+comment = ("REM" / "'") (!newline .)*
+_  = white*  // optional
+__ = white+  // mandatory
 white = [ \t]+
 EOF = !.

@@ -13,11 +13,15 @@ try {
     const ast = parser.parse(code);
     console.log(JSON.stringify(ast, null, 2));
 } catch(error) {
-    const lines = code.split('\n');
-    const { line, column } = error.location.start;
-    const errorLine = lines[line - 1];
-    console.error(`Parsing Error (line: ${line}, column: ${column})`);
-    console.error(`${String(line).padStart(4, ' ')}: ${errorLine}`);
-    console.error(' '.repeat(4+2+column-1) + '^');
+    if(error.location != null) {
+        const lines = code.split('\n');
+        const { line, column } = error.location.start;
+        const errorLine = lines[line - 1];
+        console.error(`Parsing Error (line: ${line}, column: ${column})`);
+        console.error(`${String(line).padStart(4, ' ')}: ${errorLine}`);
+        console.error(' '.repeat(4+2+column-1) + '^');
+    }
+    else
+        console.error('Grammar error:')
     console.error(error.message);
 }

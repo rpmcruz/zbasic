@@ -37,7 +37,7 @@ REM:_____________________ Beginning of Functions__________________
 :REM ***********************************************************
 DIALOG OFF:MENU OFF:MOUSE OFF
 LONG FN Photo
-IF WINDOW(0)=0 OR Printing THEN RETURN
+IF WINDOW(0)=0 THEN RETURN
 GET (0,0)-(492,304),Screen(0) :REM ***Snapshot of Screen***
 END FN
 
@@ -448,12 +448,12 @@ RETURN
 "Copyright Screen"
 TEXT 0,12,0,0:PRINT@(8,1)"PRICE THEORY: An Intermediate Text":TEXT 1,12:
 PRINT@(11,2)"by David D. Friedman":TEXT 1,9:PRINT%(210,62)"HC65BH71G"
-PRINT@(2,6)"© by South-Western Publishing Co., Cincinnati, OH"
+PRINT@(2,6)"ï¿½ by South-Western Publishing Co., Cincinnati, OH"
 PRINT@(2,8)"ISBN: 0-538-80566-8"
 PRINT@(2,9)"Ver 1.1  5/91"
 PRINT@(2,10)"Produced in the United States of America"
-PRINT@(2,12)"This software was created using the ZBasicª Compiler."
-PRINT@(2,13)"Portions of this code are © Copyrighted, 1985,1986,1987,1988 by Zedcor, Inc."
+PRINT@(2,12)"This software was created using the ZBasicï¿½ Compiler."
+PRINT@(2,13)"Portions of this code are ï¿½ Copyrighted, 1985,1986,1987,1988 by Zedcor, Inc."
 PRINT@(2,15)"The use of this software/data is governed by the terms of a nonexclusive and nontransferable"
 PRINT@(2,16)"license agreement. The software/data may not be revised, translated, converted, disassembled,"
 PRINT@(2,17)"or otherwise reverse engineered. You may not copy, sell, license, lease, rent, loan, or otherwise"
@@ -1236,7 +1236,7 @@ BUTTON 8,1,"",(80,195)-(95,210),2 :REM ***O Tool***
 CIRCLE 102,203,4:CIRCLE 102,203,3
 GET(98,199)-(107,207),Screen(0)
 FOR I=0 TO 15:Cursr(8,I)=Screen(I+2):Cursr(8,I+16)=Cursr(8,I):NEXT I
-BUTTON 9,1,"",(130,195)-(145,210),2  :REM ***¥ Tool***
+BUTTON 9,1,"",(130,195)-(145,210),2  :REM ***ï¿½ Tool***
 CIRCLE FILL 150,203,2
 GET(146,199)-(155,207),Screen(0)
 FOR I=0 TO 15:Cursr(9,I)=Screen(I+2):Cursr(9,I+16)=Cursr(9,I):NEXT I
