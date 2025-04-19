@@ -3,33 +3,71 @@ scope = stmts:(statement? _ separator _)*
 
 separator = ":" / newline / comment
 statement = assignment
+  / declaration
   / functionDefinition
   / forLoop
   / ifStatement
   / returnStatement
-  / comment / definition / syscall / functionCall
+  / comment / definition / usercall / syscall
 
-syscall = [A-Z]+ __ params
-functionCall
-  = name:identifier _ "(" _ args:funcArgs? _ ")" {
-      return { type: "functionCall", name, args: args || [] };
+// ZBasic has functions like:
+// (1) FUNC a, b
+// built-in statements or commands, like PRINT
+// (2) c = FUNC(a, b)
+// built-in functions that return values, like math or string operations
+// (3) c = FN FUNC(a, b)
+// user-defined functions
+// (4) CALL FUNC(a, b)
+// I think these are user-defined functions that do not return anything (i.e., procedures)
+//
+// we treat (1) and (4) as statements. (2) and (3) as expressions.
+
+syscall
+  = cmd:[A-Z]+ _ keyword:([A-Z]+)? args:syscallArgs? {
+      return {
+        type: "syscall",
+        cmd,
+        keyword,
+        args: args || []
+      };
     }
-definition = "DEF" __ name:identifier __ "=" __ value:expression
-  { return { cmd: "DEF", name, value }; }
 
-assignment = variable __ "=" __ expression
+syscallArgs = first:syscallArg rest:(_ "," _ syscallArg)* {
+  return [first, ...rest.map(r => r[3])];
+}
+syscallArg = line / expression / none
+line = "(" number "," number ")-(" number "," number ")"
+none = ""
 
-funcArgs
-  = head:expression tail:(_ "," _ expression)* {
+declaration
+  = "DIM" __ head:dimPart tail:(_ "," _ dimPart)* {
+      return {
+        type: "declaration",
+        vars: [head, ...tail.map(t => t[3])]
+      };
+    }
+dimPart
+  = prefix:number? _ name:identifier dims:("(" intArgs ")")? {
+      return {
+        name,
+        prefix: prefix ?? null,
+        dimensions: dims ? dims[1] : []
+      };
+    }
+intArgs
+  = head:number tail:(_ "," _ number)* {
       return [head, ...tail.map(t => t[3])];
     }
 
-params = first:param rest:(_ "," _ param)* {
-  return [first, ...rest.map(r => r[3])];
-}
-param = vardim / line / expression
-vardim = (number __)? identifier ("(" params ")")?
-line = "(" number "," number ")-(" number "," number ")"
+usercall
+  = "CALL" __ name:identifier _ "(" _ args:funcArgs? _ ")" {
+      return { type: "procedureCall", name, args: args || [] };
+    }
+
+definition = "DEF" __ name:identifier __ "=" __ value:expression
+  { return { cmd: "DEF", name, value }; }
+
+assignment = variable _ "=" _ expression
 
 functionDefinition
   = long:"LONG" __ "FN" __ name:identifier
@@ -45,7 +83,7 @@ ifStatement
 returnStatement = "RETURN" { return { type: "return" }; }
 
 forLoop
-  = "FOR" __ variable:identifier _ "=" _ start:expression _ "TO" _ end:expression _ separator
+  = "FOR" __ variable:identifier _ "=" _ start:expression __ "TO" __ end:expression (__ "STEP" __ number)? _ separator
     body:scope
     _ "NEXT" __ endVar:identifier {
       return {
@@ -105,8 +143,30 @@ multiplicative
   / primary
 
 primary
-  = functionCall / string / float / integer / variable
+  = functionCall / callable / string / float / integer / variable
   / "(" _ expr:expression _ ")" { return expr; }
+
+// function expressions
+
+funcArgs
+  = head:expression tail:(_ "," _ expression)* {
+      return [head, ...tail.map(t => t[3])];
+    }
+
+
+// FN func = user defined function
+functionCall
+  = "FN" __ name:identifier _ "(" _ args:funcArgs? _ ")" {
+      return { type: "functionCall", name, args: args || [] };
+    }
+
+// we cannot distinguish now between arrays or built-in function call
+// e.g., A(0) can be access index=0 of A or call built-in function A
+callable
+  = name:identifier _ "(" args:funcArgs? ")" {
+      return { type: "callable", name, args: args || [] };
+    }
+
 
 //////////////////////// mid-level ////////////////////////
 
@@ -118,7 +178,7 @@ boolean = "True" { return {type: "constant", value: true}; }
   / "False" { return {type: "constant", value: false}; }
 float = int:[0-9]+ "." frac:[0-9]+ { return {type: "constant", value: parseFloat(int.join("") + "." + frac.join(""))}; }
 variable = name:identifier { return {type: "variable", name}; }
-char = ('\\' ['"\\']) / (!'"' .)
+char = '\\' ['"\\'] / !'"' .
 
 //////////////////////// low-level ////////////////////////
 
