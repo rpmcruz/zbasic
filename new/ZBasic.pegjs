@@ -4,11 +4,16 @@ scope = stmts:(statement? _ separator _)*
 separator = ":" / newline / comment
 statement = assignment
   / declaration
+  / labelDefinition
   / functionDefinition
   / forLoop
+  / whileLoop
   / ifStatement
-  / returnStatement
+  / longIfStatement
   / comment / definition / usercall / syscall
+
+// does return need to be explicit?
+//  / returnStatement
 
 // ZBasic has functions like:
 // (1) FUNC a, b
@@ -23,7 +28,7 @@ statement = assignment
 // we treat (1) and (4) as statements. (2) and (3) as expressions.
 
 syscall
-  = cmd:[A-Z]+ _ keyword:([A-Z]+)? args:syscallArgs? {
+  = cmd:[A-Z]+ _ keyword:([A-Z]+)? _ args:syscallArgs? {
       return {
         type: "syscall",
         cmd,
@@ -38,6 +43,8 @@ syscallArgs = first:syscallArg rest:(_ "," _ syscallArg)* {
 syscallArg = line / expression / none
 line = "(" number "," number ")-(" number "," number ")"
 none = ""
+
+labelDefinition = '"' chars:char* '"'
 
 declaration
   = "DIM" __ head:dimPart tail:(_ "," _ dimPart)* {
@@ -77,8 +84,24 @@ functionDefinition
       return { type: "function", name, args: args || [], statements };
     }
 ifStatement
-  = "IF" __ cond:expression __ "THEN" __ action:statement {
-      return { type: "if", condition: cond, action };
+  = "IF" __ cond:expression __ ("THEN" __)? action:statement elsePart:(_ "ELSE" __ elseAction:statement)? {
+      return {
+        type: "if",
+        condition: cond,
+        action,
+        else: elsePart ? elsePart[3] : null
+      };
+    }
+longIfStatement
+  = "LONG IF" __ cond:expression __ "THEN" _ thenBlock:scope
+    elseBlock:(_ "XELSE" _ elseScope:scope)? 
+    _ "END" __ "IF" {
+      return {
+        type: "longIf",
+        condition: cond,
+        then: thenBlock,
+        else: elseBlock ? elseBlock[3] : null
+      };
     }
 returnStatement = "RETURN" { return { type: "return" }; }
 
@@ -93,6 +116,17 @@ forLoop
         end,
         body,
         endVar
+      };
+    }
+
+whileLoop
+  = "WHILE" __ condition:expression _ separator
+    body:scope
+    _ "WEND" {
+      return {
+        type: "while",
+        condition,
+        body,
       };
     }
 
@@ -138,8 +172,15 @@ additive
   / multiplicative
 
 multiplicative
-  = left:primary _ op:("*" / "/") _ right:multiplicative
+  = left:unary _ op:("*" / "/") _ right:multiplicative
     { return { type: "binary", operator: op, left, right }; }
+  / unary
+
+unary
+  = "-" _ expr:unary
+    { return { type: "unary", operator: "-", expression: expr }; }
+  / "+" _ expr:unary
+    { return { type: "unary", operator: "+", expression: expr }; }
   / primary
 
 primary
@@ -160,7 +201,7 @@ functionCall
       return { type: "functionCall", name, args: args || [] };
     }
 
-// we cannot distinguish now between arrays or built-in function call
+// ambiguous: can be array or built-in function call
 // e.g., A(0) can be access index=0 of A or call built-in function A
 callable
   = name:identifier _ "(" args:funcArgs? ")" {
@@ -171,9 +212,9 @@ callable
 //////////////////////// mid-level ////////////////////////
 
 identifier = [a-zA-Z_][a-zA-Z0-9_]*([%&!#$])? { return text(); }
-number = digits:[0-9]+ { return parseInt(digits.join(""), 10); }
+number = sign:"-"? digits:[0-9]+ { return parseInt((sign || "") + digits.join(""), 10); }
 string = '"' chars:char* '"' { return {type: "literal", value: chars.join("")}; }
-integer = digits:[0-9]+ { return {type: "constant", value: parseInt(digits.join(""), 10)}; }
+integer = value:number { return {type: "constant", value}; }
 boolean = "True" { return {type: "constant", value: true}; }
   / "False" { return {type: "constant", value: false}; }
 float = int:[0-9]+ "." frac:[0-9]+ { return {type: "constant", value: parseFloat(int.join("") + "." + frac.join(""))}; }
