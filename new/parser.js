@@ -10,7 +10,14 @@ const code = fs.readFileSync('pthy1.1.txt', 'utf8');
 
 // Parse and print the result
 try {
-    const ast = parser.parse(code);
+    const ast = parser.parse(code,
+        {  // progress bar
+            positionCallback: (progress) => {
+              //const percent = Math.round(progressRatio * 100);
+              console.log(`Progress: ${progress}`);
+            }
+        }
+    );
     console.log(JSON.stringify(ast, null, 2));
 } catch(error) {
     if(error.location != null) {

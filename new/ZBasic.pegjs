@@ -1,7 +1,18 @@
+{
+  let positionCallback = options.positionCallback || (() => {});
+}
+
 start = scope EOF
-scope = stmts:(statement? _ separator _)*
+scope = stmts:(statementWithProgress _ separator _)*
 
 separator = ":" / newline / comment
+
+statementWithProgress
+  = s:statement {
+      positionCallback(location().start.line);
+      return s;
+    }
+
 statement = assignment
   / declaration
   / labelDefinition
@@ -11,6 +22,7 @@ statement = assignment
   / ifStatement
   / longIfStatement
   / comment / definition / usercall / syscall
+  / none
 
 // does return need to be explicit?
 //  / returnStatement
@@ -40,8 +52,9 @@ syscall
 syscallArgs = first:syscallArg rest:(_ "," _ syscallArg)* {
   return [first, ...rest.map(r => r[3])];
 }
-syscallArg = line / expression / none
-line = "(" number "," number ")-(" number "," number ")"
+syscallArg = numFromTo / exprFromTo / expression / none
+numFromTo = "(" number "," number ")-(" number "," number ")"
+exprFromTo = expression _ "," _ expression __ "TO" __ expression _ "," _ expression
 none = ""
 
 labelDefinition = '"' chars:char* '"'
@@ -77,10 +90,12 @@ definition = "DEF" __ name:identifier __ "=" __ value:expression
 assignment = variable _ "=" _ expression
 
 functionDefinition
-  = long:"LONG" __ "FN" __ name:identifier
+  = "LONG FN" __ name:identifier
     (_ "(" _ args:funcArgs _ ")")? _ separator
+// FIXME: stop scope on END FN
+// scope = stmts:(!(("XELSE" / "END IF") _) statement _ separator)*
     statements:scope
-    _ "END" __ "FN" {
+    _ "END FN" {
       return { type: "function", name, args: args || [], statements };
     }
 ifStatement
@@ -93,9 +108,12 @@ ifStatement
       };
     }
 longIfStatement
-  = "LONG IF" __ cond:expression __ "THEN" _ thenBlock:scope
+  = "LONG IF" __ cond:expression _ separator
+// FIXME: stop scope on XELSE OR END IF
+// scope = stmts:(!(("XELSE" / "END IF") _) statement _ separator)*
+  thenBlock:scope
     elseBlock:(_ "XELSE" _ elseScope:scope)? 
-    _ "END" __ "IF" {
+    _ "END IF" {
       return {
         type: "longIf",
         condition: cond,
@@ -107,6 +125,7 @@ returnStatement = "RETURN" { return { type: "return" }; }
 
 forLoop
   = "FOR" __ variable:identifier _ "=" _ start:expression __ "TO" __ end:expression (__ "STEP" __ number)? _ separator
+// FIXME: stop scope on NEXT
     body:scope
     _ "NEXT" __ endVar:identifier {
       return {
@@ -121,6 +140,7 @@ forLoop
 
 whileLoop
   = "WHILE" __ condition:expression _ separator
+// FIXME: stop scope on WEND
     body:scope
     _ "WEND" {
       return {
