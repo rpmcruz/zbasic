@@ -94,6 +94,12 @@ functionDefinition
     (_ "(" _ args:funcArgs _ ")")? _ separator
 // FIXME: stop scope on END FN
 // scope = stmts:(!(("XELSE" / "END IF") _) statement _ separator)*
+// it's possible to pass parameters to rules, such as:
+//thenScope = scopeUntil(["XELSE", "END IF"])
+//elseScope = _ "XELSE" _ scopeUntil(["END IF"])
+//scopeUntil[terminators] = stmts:(!terminatorLine statement _ separator)* { return stmts.map(s => s[0]); }
+// ..but we need to be careful when terminating using lookaheads because of nested statements
+//   like LONG IF
     statements:scope
     _ "END FN" {
       return { type: "function", name, args: args || [], statements };
