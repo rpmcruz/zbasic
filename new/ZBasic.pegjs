@@ -2,18 +2,25 @@
   let positionCallback = options.positionCallback || (() => {});
 }
 
-start = scope EOF
-scope = stmts:(statementWithProgress _ separator _)*
-
-separator = ":" / newline / comment
+start = block EOF
+block
+  = _ stmt:statementWithProgress _ separator rest:block {
+      return [stmt, ...rest];
+    }
+  / _ stmt:statementWithProgress _ {
+      return [stmt];
+    }
+separator = ":" / newline / comment newline
 
 statementWithProgress
   = s:statement {
-      positionCallback(location().start.line);
+      positionCallback(location().start.line, s);
       return s;
     }
 
-statement = assignment
+statement =
+  comment
+  / assignment
   / declaration
   / labelDefinition
   / functionDefinition
@@ -21,7 +28,7 @@ statement = assignment
   / whileLoop
   / ifStatement
   / longIfStatement
-  / comment / definition / usercall / syscall
+  / definition / usercall / syscall
   / none
 
 // does return need to be explicit?
@@ -40,7 +47,7 @@ statement = assignment
 // we treat (1) and (4) as statements. (2) and (3) as expressions.
 
 syscall
-  = cmd:[A-Z]+ _ keyword:([A-Z]+)? _ args:syscallArgs? {
+  = !(reservedCmds) cmd:[A-Z]+ _ keyword:([A-Z]+)? _ args:syscallArgs? {
       return {
         type: "syscall",
         cmd,
@@ -49,13 +56,17 @@ syscall
       };
     }
 
+// FIXME: instead of excluding some commands as syscalls
+// maybe it would be cleaner to have a list of syscalls
+reservedCmds = "END" / "XELSE" / "WEND" / "NEXT"
+
 syscallArgs = first:syscallArg rest:(_ "," _ syscallArg)* {
   return [first, ...rest.map(r => r[3])];
 }
 syscallArg = numFromTo / exprFromTo / expression / none
 numFromTo = "(" number "," number ")-(" number "," number ")"
 exprFromTo = expression _ "," _ expression __ "TO" __ expression _ "," _ expression
-none = ""
+none = _
 
 labelDefinition = '"' chars:char* '"'
 
@@ -91,18 +102,18 @@ assignment = variable _ "=" _ expression
 
 functionDefinition
   = "LONG FN" __ name:identifier
-    (_ "(" _ args:funcArgs _ ")")? _ separator
-// FIXME: stop scope on END FN
-// scope = stmts:(!(("XELSE" / "END IF") _) statement _ separator)*
+    argsPart:(_ "(" _ funcArgs _ ")")? _ separator
+// FIXME: stop block on END FN
+// block = stmts:(!(("XELSE" / "END IF") _) statement _ separator)*
 // it's possible to pass parameters to rules, such as:
 //thenScope = scopeUntil(["XELSE", "END IF"])
 //elseScope = _ "XELSE" _ scopeUntil(["END IF"])
 //scopeUntil[terminators] = stmts:(!terminatorLine statement _ separator)* { return stmts.map(s => s[0]); }
 // ..but we need to be careful when terminating using lookaheads because of nested statements
 //   like LONG IF
-    statements:scope
+    statements:block
     _ "END FN" {
-      return { type: "function", name, args: args || [], statements };
+      return { type: "function", name, args: argsPart ? (argsPart[3] || []) : [], statements };
     }
 ifStatement
   = "IF" __ cond:expression __ ("THEN" __)? action:statement elsePart:(_ "ELSE" __ elseAction:statement)? {
@@ -115,10 +126,10 @@ ifStatement
     }
 longIfStatement
   = "LONG IF" __ cond:expression _ separator
-// FIXME: stop scope on XELSE OR END IF
-// scope = stmts:(!(("XELSE" / "END IF") _) statement _ separator)*
-  thenBlock:scope
-    elseBlock:(_ "XELSE" _ elseScope:scope)? 
+// FIXME: stop block on XELSE OR END IF
+// block = stmts:(!(("XELSE" / "END IF") _) statement _ separator)*
+  thenBlock:block
+    elseBlock:(_ "XELSE" _ elseScope:block)? 
     _ "END IF" {
       return {
         type: "longIf",
@@ -131,8 +142,8 @@ returnStatement = "RETURN" { return { type: "return" }; }
 
 forLoop
   = "FOR" __ variable:identifier _ "=" _ start:expression __ "TO" __ end:expression (__ "STEP" __ number)? _ separator
-// FIXME: stop scope on NEXT
-    body:scope
+// FIXME: stop block on NEXT
+    body:block
     _ "NEXT" __ endVar:identifier {
       return {
         type: "for",
@@ -146,8 +157,8 @@ forLoop
 
 whileLoop
   = "WHILE" __ condition:expression _ separator
-// FIXME: stop scope on WEND
-    body:scope
+// FIXME: stop block on WEND
+    body:block
     _ "WEND" {
       return {
         type: "while",
@@ -250,7 +261,7 @@ char = '\\' ['"\\'] / !'"' .
 //////////////////////// low-level ////////////////////////
 
 newline = "\r\n" / "\n" / "\r"
-comment = ("REM" / "'") (!newline .)*
+comment = ("REM " / "'") (!newline .)*
 _  = white*  // optional
 __ = white+  // mandatory
 white = [ \t]+

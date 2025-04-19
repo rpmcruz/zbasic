@@ -6,15 +6,16 @@ const grammar = fs.readFileSync("ZBasic.pegjs", "utf8");
 const parser = peg.generate(grammar);
 
 // ZBasic code to parse
-const code = fs.readFileSync('pthy1.1.txt', 'utf8');
+const code = fs.readFileSync('test.txt', 'utf8');
 
 // Parse and print the result
 try {
     const ast = parser.parse(code,
         {  // progress bar
-            positionCallback: (progress) => {
+            positionCallback: (progress, s) => {
               //const percent = Math.round(progressRatio * 100);
               console.log(`Progress: ${progress}`);
+              console.log(s);
             }
         }
     );

@@ -1,8 +1,37 @@
-REM:***Price Theory Programs Ver 1.1, May 2, 1991***
-REM:***Written by David D. Friedman***
+LONG FN Enable(I)
+Mhndl&=FN GETMHANDLE(I):Item=FN COUNTMITEMS(Mhndl&)
+FOR J=0 TO Item:CALL ENABLEITEM(Mhndl&,J):CALL CHECKITEM(Mhndl&,J,0):NEXT J
+END FN
 
-'Problems: Add cancel printing option? SW says laser printing problem. ???
-'Axis tool line sometimes leaves one black dot on axis.
-
-COORDINATE WINDOW:DEF MOUSE = 1
-DIM Yk&(462),Y1k&(462),Y2k&(462),Y3k&(462)
+REM ***********************FillCurves*************************
+LONG FN Fillcurves(XFCi,XFCf)
+Surplus&=-FixedCost*SFactorInv+P*(XFCf-Xo)-YInt&(XFCf) 
+IF XFCi=XFCf THEN GOTO "EndFillCurve"
+LONG IF XFCf>XFCi
+CALL SETRECT(PupRect(0),XFCi,0,XFCf,P) :REM  ***Defines rect above P**
+CALL SETRECT(PdownRect(0),XFCi,P,XFCf,350) :REM  ***Define rect below P**
+XELSE
+CALL SETRECT(PupRect(0),XFCf,0,XFCi,P) :REM  ***Defines rect above P**
+CALL SETRECT(PdownRect(0),XFCf,P,XFCi,350) :REM  ***Define rect below P**
+END IF
+CALL RECTRGN(DownHand&,PdownRect(0)) :REM  ***Makes it a region***
+CALL RECTRGN(UpHand&,PupRect(0))  :REM  ***Makes it a region***
+CALL SECTRGN(UpHand&,YHand&,HighHand&)
+CALL DIFFRGN(DownHand&,YHand&,LowHand&)
+IF Prefix$="M" THEN Inset=2 ELSE Inset=1
+CALL INSETRGN(HighHand&,0,Inset):CALL INSETRGN(LowHand&,0,2)
+LONG IF XFCf>XFCi
+Qmx=XFCf:Qmn=XFCi
+LONG IF Prefix$="D"
+CALL FILLRGN(HighHand&,Plus(0)):CALL FILLRGN(LowHand&,Minus(0))
+XELSE
+CALL FILLRGN(HighHand&,Minus(0)):CALL FILLRGN(LowHand&,Plus(0))
+END IF
+XELSE
+Qmx=XFCi:Qmn=XFCf
+CALL ERASERGN(HighHand&):CALL ERASERGN(LowHand&)
+END IF
+IF P>Yo-12 OR FN RECTINRGN(AxisTst(0),LowHand&) THEN GOSUB "ReDrawHAxis"
+"EndFillCurve"
+FN Photo
+END FN
