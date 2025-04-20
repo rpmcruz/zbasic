@@ -15,6 +15,8 @@ try {
             positionCallback: (progress, s) => {
               //const percent = Math.round(progressRatio * 100);
               console.log(`Progress: ${progress}`);
+              while(Array.isArray(s))
+                s = s[0];
               console.log(s);
             }
         }

@@ -23,6 +23,7 @@ statement =
   / assignment
   / declaration
   / labelDefinition
+  / functionCall
   / functionDefinition
   / forLoop
   / whileLoop
@@ -47,18 +48,22 @@ statement =
 // we treat (1) and (4) as statements. (2) and (3) as expressions.
 
 syscall
-  = !(reservedCmds) cmd:[A-Z]+ _ keyword:([A-Z]+)? _ args:syscallArgs? {
+  = cmd:syscmd keyword:(__ [A-Z]+)? args:(__ syscallArgs)? {
       return {
         type: "syscall",
         cmd,
-        keyword,
-        args: args || []
+        keyword: keyword ? keyword[1] : null,
+        args: args ? args[1] : null,
       };
     }
 
 // FIXME: instead of excluding some commands as syscalls
 // maybe it would be cleaner to have a list of syscalls
-reservedCmds = "END" / "XELSE" / "WEND" / "NEXT"
+
+syscmd =
+  "GOTO" / "GOSUB"
+  / "COORDINATE" / "DIALOG" / "MENU" / "MOUSE"
+  / "GET" / "PUT" / "PLOT"
 
 syscallArgs = first:syscallArg rest:(_ "," _ syscallArg)* {
   return [first, ...rest.map(r => r[3])];
@@ -234,8 +239,8 @@ funcArgs
 
 // FN func = user defined function
 functionCall
-  = "FN" __ name:identifier _ "(" _ args:funcArgs? _ ")" {
-      return { type: "functionCall", name, args: args || [] };
+  = "FN" __ name:identifier args:(_ "(" _ funcArgs _ ")")? {
+      return { type: "functionCall", name, args: args ? args[3] : [] };
     }
 
 // ambiguous: can be array or built-in function call
