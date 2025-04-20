@@ -12,12 +12,12 @@ const code = fs.readFileSync('test.txt', 'utf8');
 try {
     const ast = parser.parse(code,
         {  // progress bar
-            positionCallback: (progress, s) => {
+            progressCallback: (line, s) => {
               //const percent = Math.round(progressRatio * 100);
-              console.log(`Progress: ${progress}`);
+              console.log(`Progress: ${line}`);
               while(Array.isArray(s))
                 s = s[0];
-              console.log(s);
+              //console.log(s);
             }
         }
     );

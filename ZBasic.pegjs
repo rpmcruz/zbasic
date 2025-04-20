@@ -1,255 +1,123 @@
 {
-  let positionCallback = options.positionCallback || (() => {});
+let progressCallback = options.progressCallback || (() => {});
 }
 
-start = block EOF
+start = block:block EOF { return block; }
 block
-  = _ stmt:statementWithProgress _ separator rest:block {
-      return [stmt, ...rest];
-    }
-  / _ stmt:statementWithProgress _ {
-      return [stmt];
-    }
+  = _ stmt:statementWithProgress _ separator rest:block
+    { return stmt ? [stmt, ...rest] : rest; }
+  / _ stmt:statementWithProgress _
+    { return stmt ? [stmt] : []; }
 separator = ":" / newline / comment newline
 
-statementWithProgress
-  = s:statement {
-      positionCallback(location().start.line, s);
-      return s;
-    }
+statementWithProgress = s:statement
+  { progressCallback(location().start.line, s); return s; }
+statement = comment { return null; }
+  / definition / dimVar / assignVar / label
+  / userProcCall / userFuncCall / userLongFuncDef / sysFuncCall
+  / forLoop / whileLoop
+  / ifCond / longIfConf
+  / nop
 
-statement =
-  comment
-  / assignment
-  / declaration
-  / labelDefinition
-  / functionCall
-  / functionDefinition
-  / forLoop
-  / whileLoop
-  / ifStatement
-  / longIfStatement
-  / definition / usercall / syscall
-  / none
-
-// does return need to be explicit?
-//  / returnStatement
-
-// ZBasic has functions like:
-// (1) FUNC a, b
-// built-in statements or commands, like PRINT
-// (2) c = FUNC(a, b)
-// built-in functions that return values, like math or string operations
-// (3) c = FN FUNC(a, b)
-// user-defined functions
-// (4) CALL FUNC(a, b)
-// I think these are user-defined functions that do not return anything (i.e., procedures)
-//
-// we treat (1) and (4) as statements. (2) and (3) as expressions.
-
-syscall
-  = cmd:syscmd keyword:(__ [A-Z]+)? args:(__ syscallArgs)? {
-      return {
-        type: "syscall",
-        cmd,
-        keyword: keyword ? keyword[1] : null,
-        args: args ? args[1] : null,
-      };
-    }
-
-// FIXME: instead of excluding some commands as syscalls
-// maybe it would be cleaner to have a list of syscalls
-
-syscmd =
-  "GOTO" / "GOSUB"
+sysFuncCall = cmd:sysCmds keyword:(__ [A-Z]+)? args:(__ sysArgs)?
+  { return {type: "sysFuncCall", cmd, keyword: keyword ? keyword[1] : null,
+    args: args ? args[1] : null }; }
+sysCmds = "GOTO" / "GOSUB" / "RETURN"
   / "COORDINATE" / "DIALOG" / "MENU" / "MOUSE"
   / "GET" / "PUT" / "PLOT"
-
-syscallArgs = first:syscallArg rest:(_ "," _ syscallArg)* {
+sysArgs = first:sysArg rest:(_ "," _ sysArg)* {
   return [first, ...rest.map(r => r[3])];
 }
-syscallArg = numFromTo / exprFromTo / expression / none
-numFromTo = "(" number "," number ")-(" number "," number ")"
-exprFromTo = expression _ "," _ expression __ "TO" __ expression _ "," _ expression
-none = _
+sysArg = numFromTo / exprFromTo / expression / nop
+numFromTo = "(" fromX:integer "," fromY:integer ")-(" toX:integer "," toY:integer ")"
+  { return {from: [fromX, fromY], to: [toX, toY] }; }
+exprFromTo = fromX:expression _ "," _ fromY:expression __ "TO" __ toX:expression _ "," _ toY:expression
+  { return {from: [fromX, fromY], to: [toX, toY]}; }
+nop = _ { return null; }
 
-labelDefinition = '"' chars:char* '"'
+label = '"' chars:char* '"'
+  {     console.log("chars =", chars);
+    console.log("joined =", chars.join(""));
+return {type: "label", label: chars.join("")}; }
 
-declaration
-  = "DIM" __ head:dimPart tail:(_ "," _ dimPart)* {
-      return {
-        type: "declaration",
-        vars: [head, ...tail.map(t => t[3])]
-      };
-    }
-dimPart
-  = prefix:number? _ name:identifier dims:("(" intArgs ")")? {
-      return {
-        name,
-        prefix: prefix ?? null,
-        dimensions: dims ? dims[1] : []
-      };
-    }
-intArgs
-  = head:number tail:(_ "," _ number)* {
-      return [head, ...tail.map(t => t[3])];
-    }
+dimVar = "DIM" __ args:dimArgs
+  { return {type: "dim", args}; }
+dimArgs = head:dimPart tail:(_ "," _ dimPart)*
+  { return [head, ...tail.map(t => t[3])]; }
+dimPart = prefix:number? _ name:identifier dims:("(" intArgs ")")? {
+  return { name, prefix, dims: dims ? dims[1] : []}; }
+intArgs = head:number tail:(_ "," _ number)*
+  { return [head, ...tail.map(t => t[3])]; }
 
-usercall
-  = "CALL" __ name:identifier _ "(" _ args:funcArgs? _ ")" {
-      return { type: "procedureCall", name, args: args || [] };
-    }
+userProcCall = "CALL" __ name:identifier _ "(" _ args:exprArgs? _ ")"
+  { return {type: "procedureCall", name, args: args || []}; }
 
 definition = "DEF" __ name:identifier __ "=" __ value:expression
-  { return { cmd: "DEF", name, value }; }
+  { return {type: "def", name, value}; }
+assignVar = name:variable _ "=" _ value:expression
+  { return {type: "assign", name, value}; }
 
-assignment = variable _ "=" _ expression
+userLongFuncDef
+  = "LONG FN" __ name:identifier args:(_ "(" _ exprArgs _ ")")? _ separator !"END FN" body:block _ "END FN"
+    { return {type: "function", name, args: args ? (args[3] || []) : [], body: body[1]}; }
+exprArgs = head:expression tail:(_ "," _ expression)*
+  { return [head, ...tail.map(t => t[3])]; }
+ifCond = "IF" __ condition:expression __ ("THEN" __)? action:statement maybeElse:(_ "ELSE" __ statement)?
+  { return {type: "if", condition, body: [action], else: maybeElse ? maybeElse[3] : null}; }
+longIfConf = "LONG IF" __ condition:expression _ separator body:block maybeElse:(_ "XELSE" _ block)?  _ "END IF"
+  { return {type: "if", condition, body, else: maybeElse ? maybeElse[3] : null}; }
 
-functionDefinition
-  = "LONG FN" __ name:identifier
-    argsPart:(_ "(" _ funcArgs _ ")")? _ separator
-// FIXME: stop block on END FN
-// block = stmts:(!(("XELSE" / "END IF") _) statement _ separator)*
-// it's possible to pass parameters to rules, such as:
-//thenScope = scopeUntil(["XELSE", "END IF"])
-//elseScope = _ "XELSE" _ scopeUntil(["END IF"])
-//scopeUntil[terminators] = stmts:(!terminatorLine statement _ separator)* { return stmts.map(s => s[0]); }
-// ..but we need to be careful when terminating using lookaheads because of nested statements
-//   like LONG IF
-    statements:block
-    _ "END FN" {
-      return { type: "function", name, args: argsPart ? (argsPart[3] || []) : [], statements };
-    }
-ifStatement
-  = "IF" __ cond:expression __ ("THEN" __)? action:statement elsePart:(_ "ELSE" __ elseAction:statement)? {
-      return {
-        type: "if",
-        condition: cond,
-        action,
-        else: elsePart ? elsePart[3] : null
-      };
-    }
-longIfStatement
-  = "LONG IF" __ cond:expression _ separator
-// FIXME: stop block on XELSE OR END IF
-// block = stmts:(!(("XELSE" / "END IF") _) statement _ separator)*
-  thenBlock:block
-    elseBlock:(_ "XELSE" _ elseScope:block)? 
-    _ "END IF" {
-      return {
-        type: "longIf",
-        condition: cond,
-        then: thenBlock,
-        else: elseBlock ? elseBlock[3] : null
-      };
-    }
-returnStatement = "RETURN" { return { type: "return" }; }
-
-forLoop
-  = "FOR" __ variable:identifier _ "=" _ start:expression __ "TO" __ end:expression (__ "STEP" __ number)? _ separator
-// FIXME: stop block on NEXT
-    body:block
-    _ "NEXT" __ endVar:identifier {
-      return {
-        type: "for",
-        variable,
-        start,
-        end,
-        body,
-        endVar
-      };
-    }
-
-whileLoop
-  = "WHILE" __ condition:expression _ separator
-// FIXME: stop block on WEND
-    body:block
-    _ "WEND" {
-      return {
-        type: "while",
-        condition,
-        body,
-      };
-    }
+forLoop = "FOR" __ variable:identifier _ "=" _ start:expression __ "TO" __ end:expression (__ "STEP" __ number)? _ separator !"NEXT" body:block _ "NEXT" __ identifier
+  { return {type: "for", variable, start, end, body}; }
+whileLoop = "WHILE" __ condition:expression _ separator !"WEND" body:block _ "WEND"
+  { return {type: "while", condition, body}; }
 
 //////////////////////// expressions ////////////////////////
 
 expression = logicalOr
-
-logicalOr
-  = left:logicalAnd _ "OR"i _ right:logicalOr
-    { return { type: "binary", operator: "OR", left, right }; }
+logicalOr = left:logicalAnd _ "OR" _ right:logicalOr
+  { return {type: "binary", operator: "OR", left, right}; }
   / logicalAnd
-
-logicalAnd
-  = left:not _ "AND"i _ right:logicalAnd
-    { return { type: "binary", operator: "AND", left, right }; }
+logicalAnd = left:not _ "AND" _ right:logicalAnd
+  { return {type: "binary", operator: "AND", left, right}; }
   / not
-
-not
-  = "NOT"i _ expr:not
-    { return { type: "unary", operator: "NOT", expression: expr }; }
+not = "NOT" _ expression:not
+  { return {type: "unary", operator: "NOT", expression}; }
   / comparison
-
-comparison
-  = left:concat _ op:compOp _ right:comparison
-    { return { type: "binary", operator: op, left, right }; }
-  / concat
-
 compOp = "=" / "<>" / "<=" / ">=" / "<" / ">"
-
-concat
-  = left:shift _ "&" _ right:concat
-    { return { type: "binary", operator: "&", left, right }; }
+comparison
+  = left:concat _ operator:compOp _ right:comparison
+  { return {type: "binary", operator, left, right}; }
+  / concat
+concat = left:shift _ "&" _ right:concat
+  { return {type: "binary", operator: "&", left, right}; }
   / shift
-
-shift
-  = left:additive _ "<<" _ right:shift
-    { return { type: "binary", operator: "<<", left, right }; }
+shift = left:additive _ "<<" _ right:shift
+  { return {type: "binary", operator: "<<", left, right}; }
   / additive
-
-additive
-  = left:multiplicative _ op:("+" / "-") _ right:additive
-    { return { type: "binary", operator: op, left, right }; }
+additive = left:multiplicative _ operator:("+" / "-") _ right:additive
+  { return {type: "binary", operator, left, right}; }
   / multiplicative
-
-multiplicative
-  = left:unary _ op:("*" / "/") _ right:multiplicative
-    { return { type: "binary", operator: op, left, right }; }
+multiplicative = left:unary _ operator:("*" / "/") _ right:multiplicative
+  { return {type: "binary", operator, left, right}; }
   / unary
-
 unary
-  = "-" _ expr:unary
-    { return { type: "unary", operator: "-", expression: expr }; }
-  / "+" _ expr:unary
-    { return { type: "unary", operator: "+", expression: expr }; }
+  = "-" _ expression:unary
+  { return { type: "unary", operator: "-", expression}; }
+  / "+" _ expression:unary
+  { return { type: "unary", operator: "+", expression}; }
   / primary
-
 primary
-  = functionCall / callable / string / float / integer / variable
+  = userFuncCall / callable / string / float / integer / variable
   / "(" _ expr:expression _ ")" { return expr; }
 
-// function expressions
-
-funcArgs
-  = head:expression tail:(_ "," _ expression)* {
-      return [head, ...tail.map(t => t[3])];
-    }
-
-
-// FN func = user defined function
-functionCall
-  = "FN" __ name:identifier args:(_ "(" _ funcArgs _ ")")? {
-      return { type: "functionCall", name, args: args ? args[3] : [] };
-    }
+userFuncCall = "FN" __ name:identifier args:(_ "(" _ exprArgs _ ")")?
+  { return {type: "userFuncCall", name, args: args ? args[3] : []}; }
 
 // ambiguous: can be array or built-in function call
 // e.g., A(0) can be access index=0 of A or call built-in function A
-callable
-  = name:identifier _ "(" args:funcArgs? ")" {
-      return { type: "callable", name, args: args || [] };
-    }
-
+callable = name:identifier _ "(" args:exprArgs? ")"
+  { return {type: "callable", name, args: args || []}; }
 
 //////////////////////// mid-level ////////////////////////
 
@@ -261,7 +129,8 @@ boolean = "True" { return {type: "constant", value: true}; }
   / "False" { return {type: "constant", value: false}; }
 float = int:[0-9]+ "." frac:[0-9]+ { return {type: "constant", value: parseFloat(int.join("") + "." + frac.join(""))}; }
 variable = name:identifier { return {type: "variable", name}; }
-char = '\\' ['"\\'] / !'"' .
+char = '\\' c:['"\\'] { return c; }
+  / !'"' c:. { return c; }
 
 //////////////////////// low-level ////////////////////////
 
