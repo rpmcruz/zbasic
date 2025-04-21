@@ -23,12 +23,12 @@ sysFuncCall = cmd:sysCmds keyword:(__ [A-Z]+)? args:(__ sysArgs)?
   { return {type: "sysFuncCall", cmd, keyword: keyword ? keyword[1] : null,
     args: args ? args[1] : null }; }
 sysCmds = "GOTO" / "GOSUB" / "RETURN"
-  / "COORDINATE" / "DIALOG" / "MENU" / "MOUSE"
-  / "GET" / "PUT" / "PLOT"
+  / "COORDINATE" / "DIALOG" / "MENU" / "MOUSE" / "CURSOR"
+  / "PEN" / "GET" / "PUT"
 sysArgs = first:sysArg rest:(_ "," _ sysArg)* {
   return [first, ...rest.map(r => r[3])];
 }
-sysArg = numFromTo / exprFromTo / expression / nop
+sysArg = numFromTo / exprFromTo / exprPoint / expression / nop
 numFromTo = "(" fromX:integer "," fromY:integer ")-(" toX:integer "," toY:integer ")"
   { return {from: [fromX, fromY], to: [toX, toY] }; }
 exprFromTo = fromX:expression _ "," _ fromY:expression __ "TO" __ toX:expression _ "," _ toY:expression
@@ -36,9 +36,7 @@ exprFromTo = fromX:expression _ "," _ fromY:expression __ "TO" __ toX:expression
 nop = _ { return null; }
 
 label = '"' chars:char* '"'
-  {     console.log("chars =", chars);
-    console.log("joined =", chars.join(""));
-return {type: "label", label: chars.join("")}; }
+  { return {type: "label", label: chars.join("")}; }
 
 dimVar = "DIM" __ args:dimArgs
   { return {type: "dim", args}; }
@@ -49,8 +47,10 @@ dimPart = prefix:number? _ name:identifier dims:("(" intArgs ")")? {
 intArgs = head:number tail:(_ "," _ number)*
   { return [head, ...tail.map(t => t[3])]; }
 
-userProcCall = "CALL" __ name:identifier _ "(" _ args:exprArgs? _ ")"
-  { return {type: "procedureCall", name, args: args || []}; }
+userProcCall = "CALL" __ name:identifier _ args:(_ "(" _ exprArgs _ ")")?
+  { return {type: "procedureCall", name, args: args ? args[3] : []}; }
+userFuncCall = "FN" __ name:identifier args:(_ "(" _ exprArgs _ ")")?
+  { return {type: "userFuncCall", name, args: args ? args[3] : []}; }
 
 definition = "DEF" __ name:identifier __ "=" __ value:expression
   { return {type: "def", name, value}; }
@@ -111,9 +111,6 @@ primary
   = userFuncCall / callable / string / float / integer / variable
   / "(" _ expr:expression _ ")" { return expr; }
 
-userFuncCall = "FN" __ name:identifier args:(_ "(" _ exprArgs _ ")")?
-  { return {type: "userFuncCall", name, args: args ? args[3] : []}; }
-
 // ambiguous: can be array or built-in function call
 // e.g., A(0) can be access index=0 of A or call built-in function A
 callable = name:identifier _ "(" args:exprArgs? ")"
@@ -130,12 +127,12 @@ boolean = "True" { return {type: "constant", value: true}; }
 float = int:[0-9]+ "." frac:[0-9]+ { return {type: "constant", value: parseFloat(int.join("") + "." + frac.join(""))}; }
 variable = name:identifier { return {type: "variable", name}; }
 char = '\\' c:['"\\'] { return c; }
-  / !'"' c:. { return c; }
+  / !'"' c:. { return text(); }
 
 //////////////////////// low-level ////////////////////////
 
 newline = "\r\n" / "\n" / "\r"
-comment = ("REM " / "'") (!newline .)*
+comment = ("REM" ![a-zA-Z] / "'") (!newline .)*
 _  = white*  // optional
 __ = white+  // mandatory
 white = [ \t]+

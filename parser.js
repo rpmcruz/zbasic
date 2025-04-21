@@ -6,7 +6,8 @@ const grammar = fs.readFileSync("ZBasic.pegjs", "utf8");
 const parser = peg.generate(grammar);
 
 // ZBasic code to parse
-const code = fs.readFileSync('test.txt', 'utf8');
+//const code = fs.readFileSync('test.txt', 'utf8');
+const code = fs.readFileSync('progs/extracted/pthy/pthy1.1.txt', 'utf8');
 
 // Parse and print the result
 try {
