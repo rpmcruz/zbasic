@@ -1,0 +1,1169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>ZBasic</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  background: #111;
+  font-family: system-ui, sans-serif;
+  font-size: 12px;
+  display: flex;
+  height: 100vh;
+  overflow: hidden;
+  color: #ccc;
+}
+
+/* ── Sidebar ──────────────────────────────────────────────── */
+#sidebar {
+  width: 130px;
+  background: #1a1a1a;
+  border-right: 1px solid #383838;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+}
+#sidebar-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 5px;
+  padding: 8px;
+}
+.icon-btn {
+  background: #2d2d2d;
+  border: 1px solid #555;
+  border-radius: 5px;
+  color: #ddd;
+  padding: 7px 4px 5px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  font-size: 9px;
+  transition: all 0.1s;
+  user-select: none;
+  font-family: inherit;
+}
+.icon-btn svg { width: 16px; height: 16px; }
+.icon-btn:hover:not(:disabled) { background: #3a3a3a; border-color: #888; color: #fff; }
+.icon-btn:active:not(:disabled) { background: #444; }
+.icon-btn:disabled { opacity: 0.35; cursor: default; }
+.icon-btn.stop-active { color: #ff6060; border-color: #cc4444; background: #2d1a1a; }
+
+#file-list {
+  flex: 1;
+  overflow-y: auto;
+  border-top: 1px solid #383838;
+  padding: 3px 0;
+}
+.file-entry {
+  padding: 5px 8px;
+  cursor: pointer;
+  color: #bbb;
+  font-size: 10.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-left: 2px solid transparent;
+}
+.file-entry:hover { background: #2a2a2a; color: #fff; }
+.file-entry.selected { color: #fff; border-left-color: #4488ee; background: #162035; }
+
+/* ── Console ──────────────────────────────────────────────── */
+#console-area {
+  flex: 1;
+  overflow: hidden;
+}
+#console-output {
+  width: 100%; height: 100%;
+  overflow-y: auto;
+  font-family: 'Courier New', monospace;
+  font-size: 11px;
+  line-height: 1.6;
+  padding: 10px 12px;
+  background: #0a0a0a;
+  color: #22cc22;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── Canvas overlay ───────────────────────────────────────── */
+#canvas-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  flex-direction: column;
+  background: #555;
+}
+#canvas-overlay.visible { display: flex; }
+
+#dynamic-menubar {
+  background: white;
+  border-bottom: 1px solid #000;
+  height: 20px;
+  display: none;
+  align-items: stretch;
+  flex-shrink: 0;
+  user-select: none;
+  font-family: 'Chicago', 'Geneva', system-ui, sans-serif;
+  font-size: 12px;
+}
+#dynamic-menubar.active { display: flex; }
+
+.dyn-menu {
+  padding: 0 10px;
+  display: flex;
+  align-items: center;
+  cursor: pointer;
+  position: relative;
+  white-space: nowrap;
+}
+.dyn-menu:hover, .dyn-menu.open { background: #000; color: #fff; }
+.dyn-menu-drop {
+  display: none;
+  position: absolute;
+  top: 20px; left: 0;
+  background: white;
+  border: 1px solid #000;
+  min-width: 140px;
+  z-index: 200;
+  box-shadow: 2px 2px 0 #000;
+  color: #000;
+}
+.dyn-menu.open .dyn-menu-drop { display: block; }
+.dyn-menu-item {
+  padding: 3px 18px 3px 20px;
+  cursor: pointer;
+  white-space: nowrap;
+  font-size: 12px;
+}
+.dyn-menu-item:hover { background: #000; color: #fff; }
+.dyn-menu-item.sep { border-top: 1px solid #aaa; padding: 0; margin: 2px 0; pointer-events: none; }
+.dyn-menu-item.dis { color: #aaa; pointer-events: none; }
+
+#canvas-wrapper {
+  flex: 1;
+  overflow: auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-start;
+}
+#zcanvas {
+  display: block;
+  width: 100%;
+  height: auto;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+  background: white;
+}
+
+#esc-hint {
+  position: fixed;
+  bottom: 6px; right: 8px;
+  background: rgba(0,0,0,0.45);
+  color: rgba(255,255,255,0.55);
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 3px;
+  pointer-events: none;
+  z-index: 201;
+}
+
+</style>
+</head>
+<body>
+
+<div id="sidebar">
+  <div id="sidebar-buttons">
+    <button class="icon-btn" id="btn-open" onclick="openFile()" title="Open file(s)">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
+      </svg>
+      Open
+    </button>
+    <button class="icon-btn" id="btn-run" onclick="runProgram()" title="Run" disabled>
+      <svg viewBox="0 0 24 24" fill="currentColor">
+        <polygon points="5,3 19,12 5,21"/>
+      </svg>
+      Run
+    </button>
+    <button class="icon-btn" id="btn-stop" onclick="stopProgram()" title="Stop" disabled>
+      <svg viewBox="0 0 24 24" fill="currentColor">
+        <rect x="4" y="4" width="16" height="16" rx="1"/>
+      </svg>
+      Stop
+    </button>
+    <button class="icon-btn" id="btn-reset" onclick="resetAll()" title="Reset">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="1,4 1,10 7,10"/>
+        <path d="M3.51 15a9 9 0 1 0 .49-5"/>
+      </svg>
+      Reset
+    </button>
+  </div>
+  <div id="file-list"></div>
+</div>
+
+<div id="console-area">
+  <div id="console-output"></div>
+</div>
+
+<div id="canvas-overlay">
+  <div id="dynamic-menubar"></div>
+  <div id="canvas-wrapper">
+    <canvas id="zcanvas" width="512" height="342"></canvas>
+  </div>
+  <div id="esc-hint">Esc — close</div>
+</div>
+
+
+<input type="file" id="file-input" style="display:none" multiple accept=".txt,.bas,.incl,.fltr,.main">
+
+<script src="zbasic-parser.js"></script>
+<script>
+"use strict";
+
+const parser = ZBasicParser;
+
+// ── File storage ──────────────────────────────────────────────
+const files = {};
+let loadedFiles = [];
+let currentProgram = null;
+
+// ── Canvas ────────────────────────────────────────────────────
+const canvas = document.getElementById('zcanvas');
+const ctx = canvas.getContext('2d');
+
+function showCanvas() {
+  document.getElementById('canvas-overlay').classList.add('visible');
+}
+function hideCanvas() {
+  document.getElementById('canvas-overlay').classList.remove('visible');
+}
+
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { stopProgram(); hideCanvas(); }
+});
+document.addEventListener('click', e => {
+  if (!e.target.closest('.dyn-menu'))
+    document.querySelectorAll('.dyn-menu.open').forEach(m => m.classList.remove('open'));
+});
+
+function resizeCanvas(w, h) {
+  canvas.width = w; canvas.height = h;
+  ctx.fillStyle = currentBg;
+  ctx.fillRect(0, 0, w, h);
+}
+
+// ── File loading ──────────────────────────────────────────────
+document.getElementById('file-input').addEventListener('change', function(e) {
+  const flist = Array.from(e.target.files);
+  let pending = flist.length;
+  flist.forEach(file => {
+    const reader = new FileReader();
+    reader.onload = ev => {
+      files[file.name] = ev.target.result;
+      if (!loadedFiles.includes(file.name)) loadedFiles.push(file.name);
+      updateFileList();
+      if (--pending === 0 && flist.length === 1) selectFile(flist[0].name);
+    };
+    reader.readAsText(file, 'latin1');
+  });
+  this.value = '';
+});
+
+function openFile() { document.getElementById('file-input').click(); }
+
+function updateFileList() {
+  const el = document.getElementById('file-list');
+  el.innerHTML = '';
+  loadedFiles.forEach(name => {
+    const d = document.createElement('div');
+    d.className = 'file-entry';
+    d.textContent = name; d.title = name;
+    d.onclick = () => selectFile(name);
+    el.appendChild(d);
+  });
+}
+
+function selectFile(name) {
+  document.querySelectorAll('.file-entry').forEach(e => {
+    e.classList.toggle('selected', e.textContent === name);
+  });
+  parseAndLoad(name);
+}
+
+function parseAndLoad(name) {
+  consoleLog(`parsing ${name}…`);
+  try {
+    currentProgram = parser.parse(files[name], {
+      parseFile: inc => {
+        if (files[inc]) { consoleLog(`  ↳ ${inc}`); return parser.parse(files[inc], {parseFile: () => []}); }
+        consoleLog(`  [not found: ${inc}]`); return [];
+      }
+    });
+    consoleLog(`ok — ${currentProgram.length} statements\n`);
+    document.getElementById('btn-run').disabled = false;
+  } catch(err) {
+    const loc = err.location;
+    consoleLog(loc ? `✗ ${loc.start.line}:${loc.start.column} ${err.message}\n` : `✗ ${err.message}\n`);
+    currentProgram = null;
+    document.getElementById('btn-run').disabled = true;
+  }
+}
+
+// ── Console ───────────────────────────────────────────────────
+function consoleLog(msg) {
+  const el = document.getElementById('console-output');
+  el.textContent += msg + '\n';
+  el.scrollTop = el.scrollHeight;
+}
+
+// ── Event system ──────────────────────────────────────────────
+let eventQueue = [];
+let eventWaiter = null;
+
+function pushEvent(type, data = {}) {
+  const evt = {type, ...data};
+  if (eventWaiter) { eventWaiter(evt); eventWaiter = null; }
+  else eventQueue.push(evt);
+}
+async function waitForEvent(timeoutMs) {
+  if (stopRequested) throw new Error('USER_STOP');
+  if (eventQueue.length > 0) return eventQueue.shift();
+  return new Promise((resolve, reject) => {
+    eventWaiter = resolve;
+    if (timeoutMs > 0) setTimeout(() => {
+      if (eventWaiter === resolve) { eventWaiter = null; resolve({type: 'null'}); }
+    }, timeoutMs);
+  });
+}
+function clearEvents() { eventQueue = []; eventWaiter = null; }
+
+// ── Dynamic menu bar ──────────────────────────────────────────
+const menuDefs = {};
+let lastMenu = 0, lastItem = 0;
+
+function setMenu(menuId, itemId, enabled, title) {
+  if (!menuDefs[menuId]) menuDefs[menuId] = {title: '', enabled: true, items: {}};
+  if (itemId === 0) {
+    menuDefs[menuId].title = String(title ?? '');
+    menuDefs[menuId].enabled = !!enabled;
+  } else {
+    menuDefs[menuId].items[itemId] = {title: String(title ?? ''), enabled: !!enabled};
+  }
+  renderMenuBar();
+}
+
+function renderMenuBar() {
+  const bar = document.getElementById('dynamic-menubar');
+  bar.innerHTML = '';
+  const ids = Object.keys(menuDefs).map(Number).sort((a,b) => a - b);
+  const hasAny = ids.some(id => menuDefs[id].title);
+  bar.classList.toggle('active', hasAny);
+  for (const mid of ids) {
+    const m = menuDefs[mid];
+    if (!m.title) continue;
+    const wrap = document.createElement('div');
+    wrap.className = 'dyn-menu';
+    wrap.textContent = m.title;
+    const drop = document.createElement('div');
+    drop.className = 'dyn-menu-drop';
+    const iids = Object.keys(m.items).map(Number).sort((a,b) => a - b);
+    for (const iid of iids) {
+      const it = m.items[iid];
+      const el = document.createElement('div');
+      const isSep = it.title === '-' || it.title === '(-' || it.title.startsWith('---');
+      if (isSep) { el.className = 'dyn-menu-item sep'; }
+      else {
+        el.className = 'dyn-menu-item' + (it.enabled ? '' : ' dis');
+        el.textContent = it.title;
+        const _mid = mid, _iid = iid;
+        el.addEventListener('click', e => {
+          e.stopPropagation();
+          lastMenu = _mid; lastItem = _iid;
+          document.querySelectorAll('.dyn-menu.open').forEach(x => x.classList.remove('open'));
+          pushEvent('menu', {menu: _mid, item: _iid});
+        });
+      }
+      drop.appendChild(el);
+    }
+    wrap.appendChild(drop);
+    wrap.addEventListener('click', e => {
+      e.stopPropagation();
+      const wasOpen = wrap.classList.contains('open');
+      document.querySelectorAll('.dyn-menu.open').forEach(x => x.classList.remove('open'));
+      if (!wasOpen) wrap.classList.add('open');
+    });
+    bar.appendChild(wrap);
+  }
+}
+
+// ── Interpreter state ─────────────────────────────────────────
+let running = false;
+let stopRequested = false;
+let globalVars = {};
+let dataStore = [];
+let dataPtr = 0;
+let funcDefs = {};
+
+let penX = 0, penY = 0, penWidth = 1, penHeight = 1;
+let currentFg = '#000000', currentBg = '#ffffff';
+let textSize = 12, textX = 1, textY = 12;
+let yieldCounter = 0;
+
+async function maybeYield() {
+  if (stopRequested) throw new Error('USER_STOP');
+  if (++yieldCounter % 500 === 0) await new Promise(r => setTimeout(r, 0));
+}
+
+class GotoSignal  { constructor(l) { this.label = l; } }
+class GosubSignal { constructor(l) { this.label = l; } }
+class ReturnSignal {}
+
+// ── Run / Stop / Reset ────────────────────────────────────────
+async function runProgram() {
+  if (!currentProgram || running) return;
+  running = true; stopRequested = false;
+  document.getElementById('btn-run').disabled = true;
+  document.getElementById('btn-stop').disabled = false;
+  document.getElementById('btn-stop').classList.add('stop-active');
+
+  globalVars = {}; dataStore = []; dataPtr = 0; funcDefs = {};
+  clearEvents();
+  Object.keys(menuDefs).forEach(k => delete menuDefs[k]);
+  renderMenuBar();
+  currentFg = '#000000'; currentBg = '#ffffff';
+  penX = 0; penY = 0; penWidth = 1; penHeight = 1;
+  textX = 1; textY = textSize; yieldCounter = 0;
+
+  collectPass(currentProgram, funcDefs, dataStore);
+  resizeCanvas(512, 342);
+
+  try {
+    await execBlock(currentProgram, globalVars);
+    consoleLog('ended.');
+  } catch(e) {
+    if (e.message === 'END' || e.message === 'STOP') consoleLog('stopped.');
+    else if (e.message === 'USER_STOP') consoleLog('interrupted.');
+    else { consoleLog(`error: ${e.message}`); console.error(e); }
+  }
+
+  running = false;
+  document.getElementById('btn-run').disabled = false;
+  document.getElementById('btn-stop').disabled = true;
+  document.getElementById('btn-stop').classList.remove('stop-active');
+}
+
+function stopProgram() {
+  stopRequested = true;
+  if (eventWaiter) { const w = eventWaiter; eventWaiter = null; w({type: 'stop'}); }
+}
+
+function resetAll() {
+  stopProgram();
+  setTimeout(() => {
+    hideCanvas();
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    clearEvents();
+    Object.keys(menuDefs).forEach(k => delete menuDefs[k]);
+    renderMenuBar();
+    document.getElementById('console-output').textContent = '';
+  }, 50);
+}
+
+// ── Collect pass (DATA + fn defs) ─────────────────────────────
+function collectPass(stmts, fns, data) {
+  if (!stmts) return;
+  for (const s of stmts) {
+    if (!s) continue;
+    if (s.type === 'data') { for (const it of s.items) data.push(evalConstant(it)); }
+    else if (s.type === 'function' || s.type === 'localFunction') { fns[s.name.toLowerCase()] = s; collectPass(s.body, fns, data); }
+    else if (s.type === 'defFn') { fns[s.name.toLowerCase()] = s; }
+    else if (s.type === 'if') { collectPass(s.body, fns, data); if (s.else) collectPass(s.else, fns, data); }
+    else if (s.type === 'for' || s.type === 'while' || s.type === 'do_while') collectPass(s.body, fns, data);
+    else if (s.type === 'select') { for (const c of s.cases) collectPass(c.body, fns, data); }
+  }
+}
+
+function evalConstant(n) {
+  if (!n) return null;
+  if (n.type === 'constant') return n.value;
+  if (n.type === 'literal') return n.value;
+  return String(n.value ?? '');
+}
+
+// ── Block executor ────────────────────────────────────────────
+async function execBlock(stmts, env) {
+  if (!stmts) return;
+  let i = 0;
+  while (i < stmts.length) {
+    await maybeYield();
+    const stmt = stmts[i];
+    if (!stmt) { i++; continue; }
+    try {
+      const r = await execStmt(stmt, env);
+      if (r instanceof ReturnSignal) return r;
+    } catch(e) {
+      if (e instanceof GotoSignal) {
+        const idx = stmts.findIndex(s => s && s.type === 'label' && s.label.toLowerCase() === e.label);
+        if (idx >= 0) { i = idx + 1; continue; }
+        throw e;
+      }
+      if (e instanceof GosubSignal) {
+        const idx = stmts.findIndex(s => s && s.type === 'label' && s.label.toLowerCase() === e.label);
+        if (idx >= 0) {
+          let j = idx + 1;
+          gosub_inner: while (j < stmts.length) {
+            await maybeYield();
+            const s2 = stmts[j];
+            if (!s2) { j++; continue; }
+            try {
+              const r2 = await execStmt(s2, env);
+              if (r2 instanceof ReturnSignal) break;
+            } catch(e2) {
+              if (e2 instanceof ReturnSignal) break;
+              if (e2 instanceof GotoSignal) {
+                const li = stmts.findIndex(s => s && s.type === 'label' && s.label.toLowerCase() === e2.label);
+                if (li >= 0) { j = li + 1; continue gosub_inner; }
+                throw e2;
+              }
+              if (e2 instanceof GosubSignal) {
+                const ni = stmts.findIndex(s => s && s.type === 'label' && s.label.toLowerCase() === e2.label);
+                if (ni >= 0) { await execBlock(stmts.slice(ni + 1), env); break; }
+                throw e2;
+              }
+              throw e2;
+            }
+            j++;
+          }
+          i++; continue;
+        }
+        throw e;
+      }
+      throw e;
+    }
+    i++;
+  }
+}
+
+// ── Statement dispatcher ──────────────────────────────────────
+async function execStmt(stmt, env) {
+  if (!stmt) return;
+  switch (stmt.type) {
+    case 'assign':        return execAssign(stmt, env);
+    case 'print':         return execPrint(stmt, env);
+    case 'sysFuncCall':   return execSysCall(stmt, env);
+    case 'if':            return execIf(stmt, env);
+    case 'for':           return execFor(stmt, env);
+    case 'while':         return execWhile(stmt, env);
+    case 'do_while':      return execDoWhile(stmt, env);
+    case 'select':        return execSelect(stmt, env);
+    case 'on':            return execOn(stmt, env);
+    case 'procedureCall': return execProcCall(stmt, env);
+    case 'userFuncCall':  return execUserFuncCall(stmt, env);
+    case 'exprStmt':      await evalExpr(stmt.expr, env); return;
+    case 'include':       return execBlock(stmt.body, env);
+    case 'end':           throw new Error('END');
+    case 'function': case 'localFunction': funcDefs[stmt.name.toLowerCase()] = stmt; return;
+    case 'defFn': funcDefs[stmt.name.toLowerCase()] = stmt; return;
+    case 'dim': return execDim(stmt, env);
+    // silently ignore compile-time / unsupported
+    default: return;
+  }
+}
+
+// ── assign ────────────────────────────────────────────────────
+async function execAssign(stmt, env) {
+  const val = await evalExpr(stmt.value, env);
+  const name = stmt.name.toLowerCase();
+  if (stmt.idx) {
+    const arr = env[name] ?? globalVars[name];
+    const idxs = await Promise.all(stmt.idx.map(x => evalExpr(x, env)));
+    if (Array.isArray(arr)) {
+      let a = arr;
+      for (let d = 0; d < idxs.length - 1; d++) a = a[idxs[d]] || (a[idxs[d]] = []);
+      a[idxs[idxs.length - 1]] = val;
+    }
+    return;
+  }
+  if (stmt.fields && stmt.fields.length > 0) {
+    if (!env[name]) env[name] = {};
+    let obj = env[name];
+    for (let i = 0; i < stmt.fields.length - 1; i++) obj = obj[stmt.fields[i]] || (obj[stmt.fields[i]] = {});
+    obj[stmt.fields[stmt.fields.length - 1]] = val;
+    return;
+  }
+  env[name] = val;
+}
+
+// ── dim ───────────────────────────────────────────────────────
+async function execDim(stmt, env) {
+  for (const a of stmt.args) {
+    const name = a.name.toLowerCase();
+    if (a.dims && a.dims.length > 0) {
+      const sizes = await Promise.all(a.dims.map(d => evalExpr(d, env)));
+      env[name] = makeArray(sizes);
+    } else {
+      if (!(name in env)) env[name] = null;
+    }
+  }
+}
+function makeArray(sizes) {
+  const sz = (sizes[0] || 0) + 1;
+  if (sizes.length === 1) return new Array(sz).fill(0);
+  return Array.from({length: sz}, () => makeArray(sizes.slice(1)));
+}
+
+// ── print ─────────────────────────────────────────────────────
+async function execPrint(stmt, env) {
+  let parts = [];
+  for (const item of stmt.items) {
+    if (item === null) { parts.push(''); continue; }
+    parts.push(item.type === 'using' ? String(await evalExpr(item.expr, env)) : String(await evalExpr(item, env)));
+  }
+  const text = parts.join('');
+  const mode = stmt.mode;
+
+  if (mode.type === '#') { consoleLog(text); return; }
+  if (mode.type === '%' || mode.type === '@') {
+    const cx = await evalExpr(mode.coord.x, env);
+    const cy = await evalExpr(mode.coord.y, env);
+    gfxText(text, cx, cy); return;
+  }
+  // plain PRINT — send to console
+  consoleLog(text);
+}
+
+function gfxText(txt, x, y) {
+  ctx.fillStyle = currentFg;
+  ctx.font = `${textSize}px monospace`;
+  ctx.fillText(txt, x, y);
+}
+
+// ── sys calls ─────────────────────────────────────────────────
+async function execSysCall(stmt, env) {
+  const cmd = stmt.cmd;
+  const args = stmt.args || [];
+
+  async function a(i)  { if (i >= args.length || !args[i]) return null; return evalExpr(args[i], env); }
+  async function n(i)  { return Number(await a(i)) || 0; }
+  async function s(i)  { return String(await a(i) ?? ''); }
+  async function allN() { return Promise.all(args.map((x,i) => x ? n(i) : null)); }
+
+  switch(cmd) {
+    // ── graphics ────────────────────────────────────────────
+    case 'CLS': case 'HOME': {
+      showCanvas();
+      ctx.fillStyle = currentBg; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      textX = 1; textY = textSize; return;
+    }
+
+    case 'COLOR': {
+      const nums = await allN();
+      const valid = nums.filter(x => x !== null);
+      if (valid.length === 1) currentFg = mac16(valid[0]);
+      else if (valid.length === 2) { currentFg = mac16(valid[0]); currentBg = mac16(valid[1]); }
+      else if (valid.length >= 3) currentFg = `rgb(${valid[0]},${valid[1]},${valid[2]})`;
+      return;
+    }
+
+    case 'PEN': {
+      const v = await n(0);
+      if (v !== 0) { penWidth = v; penHeight = v; }
+      ctx.lineWidth = penWidth;
+      return;
+    }
+
+    case 'PLOT': {
+      showCanvas();
+      const pt = args[0];
+      if (pt && pt.x !== undefined) { penX = await evalExpr(pt.x, env); penY = await evalExpr(pt.y, env); }
+      else { penX = await n(0); penY = await n(1); }
+      ctx.fillStyle = currentFg;
+      ctx.fillRect(penX, penY, penWidth, penHeight);
+      return;
+    }
+
+    case 'LINE': {
+      showCanvas();
+      ctx.strokeStyle = currentFg; ctx.lineWidth = penWidth; ctx.beginPath();
+      for (const arg of args) {
+        if (!arg) continue;
+        if (arg.type === 'lineRel') {
+          const tx = await evalExpr(arg.to.x, env), ty = await evalExpr(arg.to.y, env);
+          ctx.moveTo(penX, penY); penX += tx; penY += ty; ctx.lineTo(penX, penY);
+        } else if (arg.x !== undefined) {
+          const tx = await evalExpr(arg.x, env), ty = await evalExpr(arg.y, env);
+          ctx.moveTo(penX, penY); penX = tx; penY = ty; ctx.lineTo(penX, penY);
+        } else if (arg.from) {
+          const ev = async x => typeof x === 'object' ? evalExpr(x, env) : x;
+          ctx.moveTo(await ev(arg.from[0]), await ev(arg.from[1]));
+          ctx.lineTo(await ev(arg.to[0]), await ev(arg.to[1]));
+        } else if (arg.type === 'polyline') {
+          for (let pi = 0; pi < arg.points.length; pi++) {
+            const px = await evalExpr(arg.points[pi][0], env), py = await evalExpr(arg.points[pi][1], env);
+            if (pi === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+          }
+        }
+      }
+      ctx.stroke(); return;
+    }
+
+    case 'BOX': {
+      showCanvas();
+      let x1, y1, x2, y2;
+      const a0 = args[0];
+      if (a0 && a0.from) {
+        const ev = async x => typeof x === 'object' ? evalExpr(x, env) : x;
+        x1 = await ev(a0.from[0]); y1 = await ev(a0.from[1]);
+        x2 = await ev(a0.to[0]);   y2 = await ev(a0.to[1]);
+      } else { [x1,y1,x2,y2] = await Promise.all([n(0),n(1),n(2),n(3)]); }
+      ctx.lineWidth = penWidth;
+      if (stmt.keyword === 'FILL') { ctx.fillStyle = currentFg; ctx.fillRect(x1,y1,x2-x1,y2-y1); }
+      else { ctx.strokeStyle = currentFg; ctx.strokeRect(x1,y1,x2-x1,y2-y1); }
+      return;
+    }
+
+    case 'CIRCLE': {
+      showCanvas();
+      const a0 = args[0];
+      let cx, cy, r;
+      if (a0 && a0.x !== undefined) {
+        cx = await evalExpr(a0.x, env); cy = await evalExpr(a0.y, env); r = await n(1);
+      } else { cx = await n(0); cy = await n(1); r = await n(2); }
+      ctx.lineWidth = penWidth; ctx.beginPath();
+      ctx.arc(cx, cy, Math.abs(r), 0, Math.PI * 2);
+      if (stmt.keyword === 'FILL') { ctx.fillStyle = currentFg; ctx.fill(); }
+      else { ctx.strokeStyle = currentFg; ctx.stroke(); }
+      return;
+    }
+
+    case 'TEXT': {
+      showCanvas();
+      const a0 = args[0];
+      let tx, ty, txt;
+      if (a0 && a0.x !== undefined) {
+        tx = await evalExpr(a0.x, env); ty = await evalExpr(a0.y, env); txt = await s(1);
+      } else { tx = await n(0); ty = await n(1); txt = await s(2); }
+      gfxText(txt, tx, ty); return;
+    }
+
+    case 'SCROLL': return;
+
+    case 'WINDOW': {
+      const a0 = args[0];
+      if (a0 && a0.from) {
+        const ev = async x => typeof x === 'object' ? evalExpr(x, env) : x;
+        const x1 = await ev(a0.from[0]), y1 = await ev(a0.from[1]);
+        const x2 = await ev(a0.to[0]),   y2 = await ev(a0.to[1]);
+        resizeCanvas(x2 - x1, y2 - y1);
+      }
+      showCanvas(); return;
+    }
+
+    // ── control ──────────────────────────────────────────────
+    case 'GOTO': {
+      const lbl = String(await evalExpr(args[0], env)).toLowerCase();
+      throw new GotoSignal(lbl);
+    }
+    case 'GOSUB': {
+      const lbl = String(await evalExpr(args[0], env)).toLowerCase();
+      throw new GosubSignal(lbl);
+    }
+    case 'RETURN': throw new ReturnSignal();
+    case 'STOP':   throw new Error('STOP');
+
+    // ── data ─────────────────────────────────────────────────
+    case 'READ': {
+      for (const arg of args) {
+        if (!arg) continue;
+        const name = arg.type === 'variable' ? arg.name.toLowerCase() : null;
+        if (name) env[name] = dataStore[dataPtr++] ?? null;
+      }
+      return;
+    }
+    case 'RESTORE': dataPtr = 0; return;
+
+    // ── menu ─────────────────────────────────────────────────
+    case 'MENU': {
+      // MENU menuId, itemId, enabled, title
+      // MENU menuId, itemId, enabled  (enable/disable only)
+      const menuId  = Number(await a(0)) || 0;
+      const itemId  = Number(await a(1)) || 0;
+      const enabled = Number(await a(2));
+      const title   = args[3] ? String(await a(3)) : null;
+      if (menuId === 0) return;
+      if (title !== null) {
+        setMenu(menuId, itemId, !!enabled, title);
+      } else {
+        // enable/disable existing item
+        if (menuDefs[menuId] && itemId > 0 && menuDefs[menuId].items[itemId]) {
+          menuDefs[menuId].items[itemId].enabled = !!enabled;
+          renderMenuBar();
+        }
+      }
+      return;
+    }
+
+    // ── dialog / input ────────────────────────────────────────
+    case 'DIALOG': {
+      const nn = await n(0);
+      if (nn === 0) {
+        // blocking wait for event — handled via evalCallable for the fn form
+        // as a stmt, just yield
+        await waitForEvent(0);
+      } else if (args.length >= 2) {
+        const msg = await s(1);
+        await alertUser('', msg);
+      }
+      return;
+    }
+
+    case 'INPUT': {
+      let prompt = '';
+      let varIdx = args.length - 1;
+      if (args.length >= 2 && args[0] && args[0].type === 'literal') {
+        prompt = args[0].value; varIdx = 1;
+      }
+      const txt = await promptUser('Input', prompt) || '';
+      const target = args[varIdx];
+      if (target && target.type === 'variable') {
+        const v = parseFloat(txt); env[target.name.toLowerCase()] = isNaN(v) ? txt : v;
+      }
+      return;
+    }
+
+    case 'BEEP': {
+      try {
+        const ac = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ac.createOscillator();
+        osc.connect(ac.destination); osc.frequency.value = 880;
+        osc.start(); osc.stop(ac.currentTime + 0.08);
+      } catch(e) {}
+      return;
+    }
+
+    case 'DELAY': { const ms = await n(0); await new Promise(r => setTimeout(r, ms * 16)); return; }
+
+    case 'SWAP': {
+      if (args.length >= 2 && args[0].type === 'variable' && args[1].type === 'variable') {
+        const a_ = args[0].name.toLowerCase(), b_ = args[1].name.toLowerCase();
+        const tmp = env[a_]; env[a_] = env[b_]; env[b_] = tmp;
+      }
+      return;
+    }
+    case 'INC': { const nm = args[0]?.type === 'variable' ? args[0].name.toLowerCase() : null; if (nm) env[nm] = (env[nm]||0)+1; return; }
+    case 'DEC': { const nm = args[0]?.type === 'variable' ? args[0].name.toLowerCase() : null; if (nm) env[nm] = (env[nm]||0)-1; return; }
+
+    // silently skip everything else
+    default: return;
+  }
+}
+
+// ── control flow ──────────────────────────────────────────────
+async function execIf(stmt, env) {
+  const cond = await evalExpr(stmt.condition, env);
+  if (isTruthy(cond)) return execBlock(stmt.body, env);
+  if (stmt.else)      return execBlock(stmt.else, env);
+}
+
+async function execFor(stmt, env) {
+  const varName = stmt.variable.toLowerCase();
+  let val = await evalExpr(stmt.start, env);
+  const end  = await evalExpr(stmt.end, env);
+  const step = stmt.step ? await evalExpr(stmt.step, env) : 1;
+  while ((step > 0 && val <= end) || (step < 0 && val >= end)) {
+    await maybeYield();
+    env[varName] = val;
+    const r = await execBlock(stmt.body, env);
+    if (r instanceof ReturnSignal) return r;
+    val += step;
+  }
+}
+
+async function execWhile(stmt, env) {
+  while (isTruthy(await evalExpr(stmt.condition, env))) {
+    await maybeYield();
+    const r = await execBlock(stmt.body, env);
+    if (r instanceof ReturnSignal) return r;
+  }
+}
+
+async function execDoWhile(stmt, env) {
+  do {
+    await maybeYield();
+    const r = await execBlock(stmt.body, env);
+    if (r instanceof ReturnSignal) return r;
+  } while (!isTruthy(await evalExpr(stmt.condition, env)));
+}
+
+async function execSelect(stmt, env) {
+  const val = await evalExpr(stmt.expr, env);
+  for (const c of stmt.cases) {
+    if (c.values === 'else') return execBlock(c.body, env);
+    for (const cv of c.values) {
+      let match = false;
+      if (cv.type === 'range') {
+        const from = await evalExpr(cv.from, env), to = await evalExpr(cv.to, env);
+        match = Number(val) >= Number(from) && Number(val) <= Number(to);
+      } else if (cv.type === 'relational') {
+        match = compareOp(cv.op, val, await evalExpr(cv.expr, env));
+      } else {
+        const cval = await evalExpr(cv, env);
+        match = val === cval || String(val).toLowerCase() === String(cval).toLowerCase();
+      }
+      if (match) return execBlock(c.body, env);
+    }
+  }
+}
+
+async function execOn(stmt, env) {
+  const val = Math.floor(Number(await evalExpr(stmt.expr, env))) - 1;
+  if (val < 0 || val >= stmt.targets.length) return;
+  const lbl = String(await evalExpr(stmt.targets[val], env)).toLowerCase();
+  if (stmt.cmd === 'GOTO') throw new GotoSignal(lbl);
+  if (stmt.cmd === 'GOSUB') throw new GosubSignal(lbl);
+}
+
+async function execProcCall(stmt, env) {
+  const fn = funcDefs[stmt.name.toLowerCase()];
+  if (!fn) { consoleLog(`undefined: ${stmt.name}`); return; }
+  const local = Object.create(env);
+  if (fn.args) for (let i = 0; i < fn.args.length; i++)
+    local[fn.args[i].name.toLowerCase()] = await evalExpr(stmt.args?.[i], env);
+  await execBlock(fn.body, local);
+}
+
+async function execUserFuncCall(stmt, env) {
+  const name = stmt.name.toLowerCase();
+  const fn = funcDefs[name];
+  if (!fn) return null;
+  const local = Object.create(env);
+  if (fn.args) for (let i = 0; i < fn.args.length; i++)
+    local[fn.args[i].name.toLowerCase()] = await evalExpr(stmt.args?.[i], env);
+  if (fn.type === 'defFn') return evalExpr(fn.value, local);
+  await execBlock(fn.body, local);
+  return fn.ret ? evalExpr(fn.ret, local) : null;
+}
+
+// ── Expression evaluator ──────────────────────────────────────
+async function evalExpr(node, env) {
+  if (node === null || node === undefined) return null;
+  switch(node.type) {
+    case 'constant':    return node.value;
+    case 'literal':     return node.value;
+    case 'variable': {
+      const name = node.name.toLowerCase();
+      if (name in env) return env[name];
+      if (name in globalVars) return globalVars[name];
+      return 0;
+    }
+    case 'chainAccess': {
+      let v = env[node.name.toLowerCase()] ?? globalVars[node.name.toLowerCase()] ?? {};
+      for (const f of node.fields) v = (v && typeof v === 'object') ? v[f.toLowerCase()] : null;
+      return v ?? 0;
+    }
+    case 'binary':      return evalBinary(node, env);
+    case 'unary':       return evalUnary(node, env);
+    case 'callable':    return evalCallable(node, env);
+    case 'userFuncCall': return execUserFuncCall(node, env);
+    case 'namedConst':  return 0;
+    case 'lineRef':     return node.label;
+    case 'deref':       return evalExpr(node.expr, env);
+    case 'compileConst': return evalExpr(node.expr, env);
+    default: return 0;
+  }
+}
+
+async function evalBinary(node, env) {
+  const L = await evalExpr(node.left, env);
+  const R = await evalExpr(node.right, env);
+  switch(node.operator) {
+    case '+': return (typeof L === 'string' || typeof R === 'string') ? String(L??'') + String(R??'') : (Number(L)||0) + (Number(R)||0);
+    case '-': return (Number(L)||0) - (Number(R)||0);
+    case '*': return (Number(L)||0) * (Number(R)||0);
+    case '/': { const d = Number(R); return d ? (Number(L)||0)/d : 0; }
+    case '\\': { const d = Number(R)|0; return d ? Math.trunc((Number(L)||0)/d) : 0; }
+    case '^': return Math.pow(Number(L)||0, Number(R)||0);
+    case 'MOD': { const d = Number(R)|0; return d ? (Number(L)|0)%d : 0; }
+    case '&': return String(L??'') + String(R??'');
+    case '=':  return (L===R || Number(L)===Number(R)) ? -1 : 0;
+    case '<>': return (L!==R && Number(L)!==Number(R)) ? -1 : 0;
+    case '<':  return Number(L) <  Number(R) ? -1 : 0;
+    case '>':  return Number(L) >  Number(R) ? -1 : 0;
+    case '<=': return Number(L) <= Number(R) ? -1 : 0;
+    case '>=': return Number(L) >= Number(R) ? -1 : 0;
+    case 'AND': return (isTruthy(L) && isTruthy(R)) ? -1 : 0;
+    case 'OR':  return (isTruthy(L) || isTruthy(R)) ? -1 : 0;
+    case '<<': return (Number(L)|0) << (Number(R)|0);
+    case '>>': return (Number(L)|0) >> (Number(R)|0);
+    default: return 0;
+  }
+}
+
+async function evalUnary(node, env) {
+  const v = await evalExpr(node.expression, env);
+  switch(node.operator) {
+    case '-': return -(Number(v)||0);
+    case '+': return Number(v)||0;
+    case 'NOT': return isTruthy(v) ? 0 : -1;
+    default: return Number(v)||0;
+  }
+}
+
+function isTruthy(v) { return !!v && v !== 0; }
+function compareOp(op, l, r) {
+  switch(op) {
+    case '=':  return l===r || Number(l)===Number(r);
+    case '<>': return l!==r;
+    case '<':  return Number(l) < Number(r);
+    case '>':  return Number(l) > Number(r);
+    case '<=': return Number(l) <= Number(r);
+    case '>=': return Number(l) >= Number(r);
+    default: return false;
+  }
+}
+
+// ── Built-in functions ────────────────────────────────────────
+async function evalCallable(node, env) {
+  const name = node.name.toLowerCase();
+  const rawArgs = node.args || [];
+  const A = async (i) => rawArgs[i] ? evalExpr(rawArgs[i], env) : null;
+  const N = async (i) => Number(await A(i)) || 0;
+  const S = async (i) => String(await A(i) ?? '');
+  const all = () => Promise.all(rawArgs.map((x,i) => x ? evalExpr(x, env) : null));
+
+  switch(name) {
+    case 'abs':   { const v = await N(0); return Math.abs(v); }
+    case 'int':   { return Math.floor(await N(0)); }
+    case 'fix':   { return Math.trunc(await N(0)); }
+    case 'cint':  { return Math.round(await N(0)); }
+    case 'sgn':   { return Math.sign(await N(0)); }
+    case 'sqr': case 'sqrt': { return Math.sqrt(Math.abs(await N(0))); }
+    case 'log':   { const v = await N(0); return v > 0 ? Math.log(v) : 0; }
+    case 'exp':   { return Math.exp(await N(0)); }
+    case 'sin':   { return Math.sin(await N(0)); }
+    case 'cos':   { return Math.cos(await N(0)); }
+    case 'tan':   { return Math.tan(await N(0)); }
+    case 'atn': case 'atan': { return Math.atan(await N(0)); }
+    case 'atan2': { return Math.atan2(await N(0), await N(1)); }
+    case 'rnd':   { return Math.random(); }
+    case 'max':   { const aa = await all(); return Math.max(...aa.map(Number)); }
+    case 'min':   { const aa = await all(); return Math.min(...aa.map(Number)); }
+    case 'pi':    return Math.PI;
+    case 'clng': case 'csng': case 'cdbl': case 'cstr':
+      return name === 'cstr' ? await S(0) : await N(0);
+
+    case 'len':   { return String(await A(0) ?? '').length; }
+    case 'left$': case 'left': { const [s,n] = await all(); return String(s??'').slice(0, Number(n)||0); }
+    case 'right$': case 'right': { const [s,n] = await all(); const st=String(s??''); return st.slice(st.length-(Number(n)||0)); }
+    case 'mid$': case 'mid': { const [s,p,n] = await all(); const st=String(s??''); const from=(Number(p)||1)-1; return n!=null?st.substr(from,Number(n)):st.slice(from); }
+    case 'str$': case 'str': { return String(Number(await A(0))||0); }
+    case 'val':   { return parseFloat(String(await A(0)??''))||0; }
+    case 'asc':   { return (String(await A(0)??'')).charCodeAt(0)||0; }
+    case 'chr$': case 'chr': { return String.fromCharCode(await N(0)); }
+    case 'hex$': case 'hex': { return (Number(await A(0))|0).toString(16).toUpperCase(); }
+    case 'oct$': case 'oct': { return (Number(await A(0))|0).toString(8); }
+    case 'instr': { const aa = await all(); return aa.length===2 ? String(aa[0]??'').indexOf(String(aa[1]??''))+1 : String(aa[1]??'').indexOf(String(aa[2]??''),(Number(aa[0])||1)-1)+1; }
+    case 'space$': case 'space': case 'spc': { return ' '.repeat(Math.max(0,await N(0))); }
+    case 'string$': case 'string': { const [n_,a_]=await all(); const c=typeof a_==='number'?String.fromCharCode(a_):String(a_??'')[0]||' '; return c.repeat(Math.max(0,Number(n_)||0)); }
+    case 'tab':   { return ' '.repeat(Math.max(0,await N(0))); }
+    case 'ucase$': case 'ucase': { return (await S(0)).toUpperCase(); }
+    case 'lcase$': case 'lcase': { return (await S(0)).toLowerCase(); }
+    case 'ltrim$': case 'ltrim': { return (await S(0)).trimStart(); }
+    case 'rtrim$': case 'rtrim': { return (await S(0)).trimEnd(); }
+    case 'trim$': case 'trim':   { return (await S(0)).trim(); }
+
+    // DIALOG(n) — event dispatch
+    case 'dialog': {
+      const nn = rawArgs.length > 0 ? await N(0) : -1;
+      if (nn === 0 || nn === -1) {
+        // Block until event
+        if (stopRequested) throw new Error('USER_STOP');
+        const evt = await waitForEvent(0);
+        if (evt.type === 'stop') throw new Error('USER_STOP');
+        if (evt.type === 'menu') return 5;    // Mac event code for menu
+        if (evt.type === 'mouse') return 1;
+        if (evt.type === 'key') return 3;
+        return 0;  // null event
+      }
+      if (nn > 0 && rawArgs.length >= 2) {
+        const msg = await S(1);
+        await alertUser('', msg);
+        return 1;
+      }
+      return 1;
+    }
+
+    // MENU() — returns last menu selection
+    case 'menu': {
+      if (rawArgs.length === 0) return lastMenu;
+      const n_ = await N(0);
+      if (n_ === 0) return lastMenu;
+      if (n_ === 1) return lastItem;
+      return 0;
+    }
+
+    // Mouse / input stubs
+    case 'mouse': case 'mousex': case 'mousey': case 'mousebtn': case 'button': return 0;
+    case 'event': return 0;
+    case 'timer': case 'tick': return Date.now() / 17;
+    case 'window': return 1;
+    case 'peek': case 'peek byte': case 'peek word': case 'peek long': return 0;
+    case 'usr': case 'usr_': return 0;
+    case 'screenbits': return 8;
+    case 'systemversion': return 0x0700;
+    case 'noevent': return -1;
+
+    // Array / misc
+    case 'ubound': { const [arr] = await all(); return Array.isArray(arr) ? arr.length-1 : 0; }
+    case 'lbound': return 0;
+    case 'vartype': return 0;
+
+    default: {
+      // User function?
+      const fn = funcDefs[name];
+      if (fn) return execUserFuncCall({type:'userFuncCall', name, args: rawArgs}, env);
+      // Array access?
+      const arr = env[name] ?? globalVars[name];
+      if (Array.isArray(arr)) {
+        const idxs = await all();
+        let v = arr;
+        for (const idx of idxs) { if (Array.isArray(v)) v = v[Number(idx)||0]; else break; }
+        return (typeof v === 'number' || typeof v === 'string') ? v : 0;
+      }
+      return 0;
+    }
+  }
+}
+
+// ── Mac 16-colour palette ─────────────────────────────────────
+function mac16(idx) {
+  const p = ['#ffffff','#ffff00','#ff6600','#dd0000','#ff0099','#330099',
+             '#0000cc','#0099ff','#00bb00','#006600','#663300','#996633',
+             '#cccccc','#888888','#444444','#000000'];
+  return p[((idx%16)+16)%16];
+}
+
+// ── Dialog helpers ────────────────────────────────────────────
+function promptUser(title, msg) {
+  const label = [title, msg].filter(Boolean).join('\n');
+  return Promise.resolve(window.prompt(label) ?? null);
+}
+function alertUser(title, msg) {
+  const label = [title, msg].filter(Boolean).join('\n');
+  window.alert(label);
+  return Promise.resolve(1);
+}
+
+// ── Init ──────────────────────────────────────────────────────
+ctx.fillStyle = '#fff';
+ctx.fillRect(0, 0, canvas.width, canvas.height);
+consoleLog('ZBasic emulator ready.\nOpen a .txt source file to begin.\n');
+</script>
+</body>
+</html>
