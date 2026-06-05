@@ -2,103 +2,66 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ZBasic</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
 body {
-  background: #111;
+  background: #1a1a1a;
   font-family: system-ui, sans-serif;
   font-size: 12px;
   display: flex;
+  flex-direction: column;
   height: 100vh;
   overflow: hidden;
   color: #ccc;
 }
 
-/* ── Sidebar ──────────────────────────────────────────────── */
-#sidebar {
-  width: 130px;
-  background: #1a1a1a;
-  border-right: 1px solid #383838;
+/* ── Toolbar ──────────────────────────────────────────────── */
+#toolbar {
   display: flex;
-  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  background: #222;
+  border-bottom: 1px solid #383838;
   flex-shrink: 0;
 }
-#sidebar-buttons {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 5px;
-  padding: 8px;
-}
-.icon-btn {
+.tb-btn {
   background: #2d2d2d;
   border: 1px solid #555;
-  border-radius: 5px;
+  border-radius: 4px;
   color: #ddd;
-  padding: 7px 4px 5px;
+  padding: 5px 14px;
   cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  font-size: 9px;
-  transition: all 0.1s;
+  font-size: 12px;
+  font-family: inherit;
+  white-space: nowrap;
   user-select: none;
+}
+.tb-btn:hover:not(:disabled) { background: #3a3a3a; border-color: #888; color: #fff; }
+.tb-btn:disabled { opacity: 0.35; cursor: default; }
+.tb-btn.running { color: #ff6060; border-color: #cc4444; background: #2d1a1a; }
+#file-select {
+  width: 200px;
+  flex-shrink: 0;
+  background: #2d2d2d;
+  border: 1px solid #555;
+  border-radius: 4px;
+  color: #ddd;
+  padding: 4px 8px;
+  font-size: 12px;
   font-family: inherit;
 }
-.icon-btn svg { width: 16px; height: 16px; }
-.icon-btn:hover:not(:disabled) { background: #3a3a3a; border-color: #888; color: #fff; }
-.icon-btn:active:not(:disabled) { background: #444; }
-.icon-btn:disabled { opacity: 0.35; cursor: default; }
-.icon-btn.stop-active { color: #ff6060; border-color: #cc4444; background: #2d1a1a; }
+#file-select:disabled { opacity: 0.5; }
 
-#file-list {
+/* ── Program view ─────────────────────────────────────────── */
+#program-view {
   flex: 1;
-  overflow-y: auto;
-  border-top: 1px solid #383838;
-  padding: 3px 0;
-}
-.file-entry {
-  padding: 5px 8px;
-  cursor: pointer;
-  color: #bbb;
-  font-size: 10.5px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  border-left: 2px solid transparent;
-}
-.file-entry:hover { background: #2a2a2a; color: #fff; }
-.file-entry.selected { color: #fff; border-left-color: #4488ee; background: #162035; }
-
-/* ── Console ──────────────────────────────────────────────── */
-#console-area {
-  flex: 1;
-  overflow: hidden;
-}
-#console-output {
-  width: 100%; height: 100%;
-  overflow-y: auto;
-  font-family: 'Courier New', monospace;
-  font-size: 11px;
-  line-height: 1.6;
-  padding: 10px 12px;
-  background: #0a0a0a;
-  color: #22cc22;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-/* ── Canvas overlay ───────────────────────────────────────── */
-#canvas-overlay {
-  display: none;
-  position: fixed;
-  inset: 0;
-  z-index: 100;
+  display: flex;
   flex-direction: column;
-  background: #555;
+  overflow: hidden;
 }
-#canvas-overlay.visible { display: flex; }
 
 #dynamic-menubar {
   background: white;
@@ -120,6 +83,7 @@ body {
   cursor: pointer;
   position: relative;
   white-space: nowrap;
+  color: #000;
 }
 .dyn-menu:hover, .dyn-menu.open { background: #000; color: #fff; }
 .dyn-menu-drop {
@@ -144,108 +108,351 @@ body {
 .dyn-menu-item.sep { border-top: 1px solid #aaa; padding: 0; margin: 2px 0; pointer-events: none; }
 .dyn-menu-item.dis { color: #aaa; pointer-events: none; }
 
+#tab-bar {
+  display: none;
+  background: #e0e0e0;
+  border-bottom: 1px solid #888;
+  flex-shrink: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+  font-family: 'Chicago', 'Geneva', system-ui, sans-serif;
+  font-size: 11px;
+}
+.win-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  cursor: pointer;
+  border-right: 1px solid #888;
+  background: #ccc;
+  color: #333;
+}
+.win-tab.active { background: #fff; font-weight: bold; color: #000; }
+.win-tab-close {
+  font-size: 10px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.5;
+  padding: 1px 2px;
+}
+.win-tab-close:hover { opacity: 1; }
+
+/* ── Canvas wrapper — contains the scaled window ─────────── */
 #canvas-wrapper {
   flex: 1;
-  overflow: auto;
   display: flex;
-  align-items: flex-start;
-  justify-content: flex-start;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  background: #555;
 }
-#zcanvas {
+.win-container {
+  display: none;
+  width: 100%;
+  height: 100%;
+  background: white;
+  position: relative;
+}
+.win-container.front { display: block; }
+.win-canvas {
   display: block;
   width: 100%;
-  height: auto;
-  image-rendering: pixelated;
-  image-rendering: crisp-edges;
+  height: 100%;
+}
+.win-textedit {
+  position: absolute;
+  overflow-y: auto;
+  font-family: 'Monaco', 'Courier New', monospace;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
   background: white;
+  color: black;
+  box-sizing: border-box;
+  padding: 2px 4px;
 }
-
-#esc-hint {
-  position: fixed;
-  bottom: 6px; right: 8px;
-  background: rgba(0,0,0,0.45);
-  color: rgba(255,255,255,0.55);
-  font-size: 10px;
-  padding: 2px 7px;
+.mac-ctrl {
+  position: absolute;
+  box-sizing: border-box;
+  font-family: 'Geneva', 'Helvetica', sans-serif;
+  margin: 0;
+  padding: 0;
+}
+.mac-btn {
+  background: #e0e0e0;
+  border: 1px solid #555;
   border-radius: 3px;
-  pointer-events: none;
-  z-index: 201;
+  padding: 0 4px;
+  font-size: 75%;
+  cursor: pointer;
+  overflow: hidden;
+  white-space: nowrap;
+  width: 100%;
+  height: 100%;
 }
-
+.mac-btn:disabled { color: #aaa; cursor: default; }
+.mac-btn.selected { background: #000; color: #fff; }
+.mac-editfield {
+  background: white;
+  border: 1px solid #888;
+  padding: 1px 2px;
+  font-size: 75%;
+  width: 100%;
+  height: 100%;
+  display: block;
+  outline: none;
+}
 </style>
 </head>
 <body>
 
-<div id="sidebar">
-  <div id="sidebar-buttons">
-    <button class="icon-btn" id="btn-open" onclick="openFile()" title="Open file(s)">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/>
-      </svg>
-      Open
-    </button>
-    <button class="icon-btn" id="btn-run" onclick="runProgram()" title="Run" disabled>
-      <svg viewBox="0 0 24 24" fill="currentColor">
-        <polygon points="5,3 19,12 5,21"/>
-      </svg>
-      Run
-    </button>
-    <button class="icon-btn" id="btn-stop" onclick="stopProgram()" title="Stop" disabled>
-      <svg viewBox="0 0 24 24" fill="currentColor">
-        <rect x="4" y="4" width="16" height="16" rx="1"/>
-      </svg>
-      Stop
-    </button>
-    <button class="icon-btn" id="btn-reset" onclick="resetAll()" title="Reset">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-        <polyline points="1,4 1,10 7,10"/>
-        <path d="M3.51 15a9 9 0 1 0 .49-5"/>
-      </svg>
-      Reset
-    </button>
-  </div>
-  <div id="file-list"></div>
+<div id="toolbar">
+  <button class="tb-btn" id="btn-open" onclick="openFile()">Open</button>
+  <select id="file-select" disabled onchange="selectFile(this.value)">
+    <option value="">— no file loaded —</option>
+  </select>
+  <button class="tb-btn" id="btn-run" onclick="toggleRun()" disabled>Run</button>
 </div>
 
-<div id="console-area">
-  <div id="console-output"></div>
-</div>
-
-<div id="canvas-overlay">
+<div id="program-view">
+  <div id="tab-bar"></div>
   <div id="dynamic-menubar"></div>
-  <div id="canvas-wrapper">
-    <canvas id="zcanvas" width="512" height="342"></canvas>
-  </div>
-  <div id="esc-hint">Esc — close</div>
+  <div id="canvas-wrapper"></div>
 </div>
 
 
-<input type="file" id="file-input" style="display:none" multiple accept=".txt,.bas,.incl,.fltr,.main">
+<input type="file" id="file-input" style="display:none" multiple accept=".txt,.bas,.incl,.fltr,.main,.rsrc">
 
 <script src="zbasic-parser.js"></script>
 <script>
-"use strict";
-
 const parser = ZBasicParser;
+const CANVAS_SCALE = 2;  // render at 2× logical resolution for crisp text
 
 // ── File storage ──────────────────────────────────────────────
 const files = {};
 let loadedFiles = [];
 let currentProgram = null;
 
-// ── Canvas ────────────────────────────────────────────────────
-const canvas = document.getElementById('zcanvas');
-const ctx = canvas.getContext('2d');
+// ── Window/Canvas management ──────────────────────────────────
+// windowDefs[id] = { title, container, canvas, ctx, teRecords: {} }
+const windowDefs = {};
+// ── TextEdit handle store ─────────────────────────────────────
+const teHandleMap = {};  // handle(fakeAddr) -> { div, text, lineHeight }
+
+// ── Fake Mac memory (for PEEK/POKE and resource handles) ───────
+const fakeMemBlocks = [];  // [{base, data: Uint8Array}]
+let nextFakeAddr = 0x10000;
+
+function fakeMalloc(size) {
+  const base = nextFakeAddr;
+  nextFakeAddr += size + 8;
+  const data = new Uint8Array(size);
+  fakeMemBlocks.push({base, data});
+  return base;
+}
+function _fakeBlock(addr, size) {
+  for (const b of fakeMemBlocks)
+    if (addr >= b.base && addr + size <= b.base + b.data.length) return b;
+  return null;
+}
+function fakeReadU32(addr) {
+  const b = _fakeBlock(addr, 4); if (!b) return 0;
+  const o = addr - b.base, d = b.data;
+  return ((d[o]<<24)|(d[o+1]<<16)|(d[o+2]<<8)|d[o+3]) >>> 0;
+}
+function fakeReadU16(addr) {
+  const b = _fakeBlock(addr, 2); if (!b) return 0;
+  const o = addr - b.base, d = b.data;
+  return (d[o]<<8)|d[o+1];
+}
+function fakeWriteU32(addr, v) {
+  const b = _fakeBlock(addr, 4); if (!b) return;
+  const o = addr - b.base, d = b.data;
+  d[o]=(v>>>24)&0xFF; d[o+1]=(v>>>16)&0xFF; d[o+2]=(v>>>8)&0xFF; d[o+3]=v&0xFF;
+}
+function fakeWriteU16(addr, v) {
+  const b = _fakeBlock(addr, 2); if (!b) return;
+  const o = addr - b.base, d = b.data;
+  d[o]=(v>>8)&0xFF; d[o+1]=v&0xFF;
+}
+function fakeWriteBytes(addr, bytes) {
+  const b = _fakeBlock(addr, bytes.length); if (!b) return;
+  b.data.set(bytes, addr - b.base);
+}
+function fakeReadBytes(addr, len) {
+  const b = _fakeBlock(addr, len); if (!b) return new Uint8Array(len);
+  return b.data.slice(addr - b.base, addr - b.base + len);
+}
+
+// Mac Roman → JS string
+const MAC_ROMAN_EXTRA = '\xC4\xC5\xC7\xC9\xD1\xD6\xDC\xE1\xE0\xE2\xE4\xE5\xE7\xE9\xE8\xEA\xEB\xED\xEC\xEE\xEF\xF1\xF3\xF2\xF4\xF6\xFA\xF9\xFB\xFC†\xB0\xA2\xA3\xA7•\xB6\xDF\xAE\xA9™\xB4\xA8≠\xC6\xD8∞\xB1≤≥\xA5\xB5∂∑∏π∫\xAA\xBAΩ\xE6\xF8\xBF\xA1\xAC√ƒ≈∆\xAB\xBB…\xA0\xC0\xC3\xD5Œœ–—“”‘’\xF7◊\xFFŸ⁄€‹›ﬁﬂ‡\xB7‚„‰\xC2\xCA\xC1\xCB\xC8\xCD\xCE\xCF\xCC\xD3\xD4\xD2\xDA\xDB\xD9ıˆ˜\xAF˘˙˚\xB8˝˛ˇ';
+function macRomanToStr(bytes) {
+  let s = '';
+  for (const b of bytes) s += b < 128 ? String.fromCharCode(b) : (MAC_ROMAN_EXTRA[b-128] ?? '?');
+  return s;
+}
+
+// ── Mac resource store (loaded from .rsrc AppleDouble files) ───
+const rsrcTexts = {};  // lowercase name -> string
+let frontWindowId = null;
+let outputWindowId = null;
+let canvas = null;   // canvas of the output window
+let ctx = null;      // ctx of the output window
+
+async function makeTeHandle(rectArg, env) {
+  let left = 0, top = 0, right = 300, bottom = 200;
+  if (rectArg?.from) {
+    const re = async x => Number(await evalExpr(x, env)) || 0;
+    left = await re(rectArg.from[0]); top = await re(rectArg.from[1]);
+    right = await re(rectArg.to[0]); bottom = await re(rectArg.to[1]);
+  }
+  const lineHeight = (textSize <= 9 ? 11 : 16);
+  // Allocate fake TERec struct (128 bytes): lineHeight @ 24, nLines @ 94
+  const teRecAddr = fakeMalloc(128);
+  fakeWriteU16(teRecAddr + 24, lineHeight);
+  fakeWriteU16(teRecAddr + 94, 1);
+  // Allocate master pointer handle (4 bytes) -> teRecAddr
+  const handle = fakeMalloc(4);
+  fakeWriteU32(handle, teRecAddr);
+
+  const div = document.createElement('div');
+  div.className = 'win-textedit';
+  const win = windowDefs[outputWindowId];
+  const cw = win?.logW || 512, ch = win?.logH || 342;
+  Object.assign(div.style, {
+    left: `${left/cw*100}%`, top: `${top/ch*100}%`,
+    width: `${(right-left)/cw*100}%`, height: `${(bottom-top)/ch*100}%`,
+    overflow: 'auto', userSelect: 'none' });
+  if (win) win.container.appendChild(div);
+
+  const rec = { div, text: '', lineHeight, viewH: bottom - top };
+  teHandleMap[handle] = rec;
+  if (win) win.teRecords[handle] = rec;
+  return handle;
+}
+
+function renderTeDiv(rec) {
+  // Render Mac \r-delimited text into the div
+  rec.div.textContent = rec.text.replace(/\r/g, '\n');
+}
+
+function getOrCreateWindow(id, title, w, h) {
+  if (!windowDefs[id]) {
+    const W = w || 512, H = h || 342;
+    const container = document.createElement('div');
+    container.className = 'win-container';
+    container.style.aspectRatio = `${W} / ${H}`;
+    const c = document.createElement('canvas');
+    c.className = 'win-canvas';
+    c.width = W * CANVAS_SCALE; c.height = H * CANVAS_SCALE;
+    container.appendChild(c);
+    document.getElementById('canvas-wrapper').appendChild(container);
+    const cx = c.getContext('2d', { willReadFrequently: true });
+    cx.scale(CANVAS_SCALE, CANVAS_SCALE);
+    cx.fillStyle = '#ffffff';
+    cx.fillRect(0, 0, W, H);
+    windowDefs[id] = { title: title || String(id), container, canvas: c, ctx: cx, logW: W, logH: H, teRecords: {} };
+  } else {
+    if (title) windowDefs[id].title = title;
+    if (w && h) {
+      const win = windowDefs[id];
+      win.logW = w; win.logH = h;
+      win.container.style.aspectRatio = `${w} / ${h}`;
+      win.canvas.width = w * CANVAS_SCALE; win.canvas.height = h * CANVAS_SCALE;
+      win.ctx.scale(CANVAS_SCALE, CANVAS_SCALE);
+      win.ctx.fillStyle = '#ffffff';
+      win.ctx.fillRect(0, 0, w, h);
+    }
+  }
+  renderTabs();
+  return windowDefs[id];
+}
+
+function bringToFront(id) {
+  if (!windowDefs[id]) return;
+  Object.values(windowDefs).forEach(w => w.container.classList.remove('front'));
+  windowDefs[id].container.classList.add('front');
+  frontWindowId = id;
+  renderTabs();
+}
+
+function setOutputWindow(id) {
+  if (!windowDefs[id]) getOrCreateWindow(id, String(id), 512, 342);
+  outputWindowId = id;
+  canvas = windowDefs[id].canvas;
+  ctx    = windowDefs[id].ctx;
+}
+
+function renderTabs() {
+  const bar = document.getElementById('tab-bar');
+  const ids = Object.keys(windowDefs).map(Number).sort((a, b) => a - b);
+  bar.innerHTML = '';
+  for (const id of ids) {
+    const t = document.createElement('div');
+    t.className = 'win-tab' + (id === frontWindowId ? ' active' : '');
+    const label = document.createElement('span');
+    label.textContent = windowDefs[id].title;
+    label.onclick = () => bringToFront(id);
+    const x = document.createElement('span');
+    x.className = 'win-tab-close';
+    x.textContent = '✕';
+    x.title = 'Close window';
+    x.onclick = (e) => { e.stopPropagation(); pushEvent('dialog', {code: 4, windowId: id}); };
+    t.appendChild(label);
+    t.appendChild(x);
+    bar.appendChild(t);
+  }
+  bar.style.display = ids.length > 0 ? 'flex' : 'none';
+}
 
 function showCanvas() {
-  document.getElementById('canvas-overlay').classList.add('visible');
+  if (outputWindowId !== null) bringToFront(outputWindowId);
 }
-function hideCanvas() {
-  document.getElementById('canvas-overlay').classList.remove('visible');
+function hideCanvas() {}
+
+
+let mouseDown = false, mouseX = 0, mouseY = 0;
+let mousePrevDown = false;  // state on previous MOUSE(0) poll
+let mouseLastPressTime = 0; // timestamp of last press edge, for double-click detection
+
+function canvasCoords(clientX, clientY) {
+  const wdef = frontWindowId !== null ? windowDefs[frontWindowId] : null;
+  const c = wdef?.canvas ?? canvas;
+  if (!c) return [0, 0];
+  const r = c.getBoundingClientRect();
+  const logW = wdef?.logW ?? (c.width / CANVAS_SCALE);
+  const logH = wdef?.logH ?? (c.height / CANVAS_SCALE);
+  return [
+    Math.round((clientX - r.left) * logW / r.width),
+    Math.round((clientY - r.top)  * logH / r.height),
+  ];
 }
 
+const canvasWrapper = document.getElementById('canvas-wrapper');
+canvasWrapper.addEventListener('mousedown', e => {
+  [mouseX, mouseY] = canvasCoords(e.clientX, e.clientY);
+  mouseDown = true;
+  if (mouseOn) pushEvent('mouse', {x: mouseX, y: mouseY});
+});
+canvasWrapper.addEventListener('mouseup',   () => { mouseDown = false; mousePrevDown = false; });
+canvasWrapper.addEventListener('mousemove', e => { [mouseX, mouseY] = canvasCoords(e.clientX, e.clientY); });
+canvasWrapper.addEventListener('touchstart', e => {
+  e.preventDefault();
+  const t = e.touches[0];
+  [mouseX, mouseY] = canvasCoords(t.clientX, t.clientY);
+  mouseDown = true;
+  if (mouseOn) pushEvent('mouse', {x: mouseX, y: mouseY});
+}, {passive: false});
+canvasWrapper.addEventListener('touchend',  e => { e.preventDefault(); mouseDown = false; mousePrevDown = false; }, {passive: false});
+canvasWrapper.addEventListener('touchmove', e => {
+  e.preventDefault();
+  const t = e.touches[0];
+  [mouseX, mouseY] = canvasCoords(t.clientX, t.clientY);
+}, {passive: false});
+
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { stopProgram(); hideCanvas(); }
 });
 document.addEventListener('click', e => {
   if (!e.target.closest('.dyn-menu'))
@@ -253,9 +460,12 @@ document.addEventListener('click', e => {
 });
 
 function resizeCanvas(w, h) {
-  canvas.width = w; canvas.height = h;
+  if (!canvas) return;
+  canvas.width = w * CANVAS_SCALE; canvas.height = h * CANVAS_SCALE;
+  ctx.scale(CANVAS_SCALE, CANVAS_SCALE);
   ctx.fillStyle = currentBg;
   ctx.fillRect(0, 0, w, h);
+  if (windowDefs[outputWindowId]) { windowDefs[outputWindowId].logW = w; windowDefs[outputWindowId].logH = h; }
 }
 
 // ── File loading ──────────────────────────────────────────────
@@ -264,62 +474,131 @@ document.getElementById('file-input').addEventListener('change', function(e) {
   let pending = flist.length;
   flist.forEach(file => {
     const reader = new FileReader();
-    reader.onload = ev => {
-      files[file.name] = ev.target.result;
-      if (!loadedFiles.includes(file.name)) loadedFiles.push(file.name);
-      updateFileList();
-      if (--pending === 0 && flist.length === 1) selectFile(flist[0].name);
-    };
-    reader.readAsText(file, 'latin1');
+    if (file.name.toLowerCase().endsWith('.rsrc')) {
+      reader.onload = ev => {
+        parseRsrcFile(ev.target.result);
+        if (--pending === 0) { updateFileSelect(); autoSelectFile(); }
+      };
+      reader.readAsArrayBuffer(file);
+    } else {
+      reader.onload = ev => {
+        files[file.name] = ev.target.result;
+        if (!loadedFiles.includes(file.name)) loadedFiles.push(file.name);
+        if (--pending === 0) { updateFileSelect(); autoSelectFile(); }
+      };
+      reader.readAsText(file, 'latin1');
+    }
   });
   this.value = '';
 });
 
+function parseRsrcFile(buffer) {
+  const v = new DataView(buffer);
+  // AppleDouble magic = 0x00051607
+  if (v.getUint32(0) !== 0x00051607) return;
+  const nEntries = v.getUint16(24);
+  let rsrcOff = -1, rsrcLen = -1;
+  for (let i = 0; i < nEntries; i++) {
+    const id = v.getUint32(26 + i*12), off = v.getUint32(30 + i*12), len = v.getUint32(34 + i*12);
+    if (id === 2) { rsrcOff = off; rsrcLen = len; break; }
+  }
+  if (rsrcOff < 0) return;
+  const r = new DataView(buffer, rsrcOff, rsrcLen);
+  const dataOff = r.getUint32(0), mapOff = r.getUint32(4);
+  const typeListOffRel = r.getUint16(mapOff + 24);
+  const nameListOffRel = r.getUint16(mapOff + 26);
+  const typeListAbs = mapOff + typeListOffRel;
+  const nameListAbs = mapOff + nameListOffRel;
+  const numTypes = r.getUint16(typeListAbs) + 1;
+  for (let i = 0; i < numTypes; i++) {
+    const tOff = typeListAbs + 2 + i*8;
+    const rtype = String.fromCharCode(r.getUint8(tOff),r.getUint8(tOff+1),r.getUint8(tOff+2),r.getUint8(tOff+3));
+    if (rtype !== 'TEXT') continue;
+    const count = r.getUint16(tOff+4) + 1;
+    const refListAbs = typeListAbs + r.getUint16(tOff+6);
+    for (let j = 0; j < count; j++) {
+      const rr = refListAbs + j*12;
+      const nameOffRel = r.getUint16(rr+2);
+      const resDataOff = dataOff + (r.getUint32(rr+4) & 0x00FFFFFF);
+      const resLen = r.getUint32(resDataOff);
+      let name = '';
+      if (nameOffRel !== 0xFFFF) {
+        const nl = r.getUint8(nameListAbs + nameOffRel);
+        for (let k = 0; k < nl; k++) name += String.fromCharCode(r.getUint8(nameListAbs + nameOffRel + 1 + k));
+      }
+      const bytes = new Uint8Array(buffer, rsrcOff + resDataOff + 4, resLen);
+      rsrcTexts[name.toLowerCase()] = macRomanToStr(bytes);
+      console.log(`  rsrc TEXT: "${name}" (${resLen} bytes)`);
+    }
+  }
+  console.log(`Loaded ${Object.keys(rsrcTexts).length} TEXT resources from .rsrc`);
+}
+
 function openFile() { document.getElementById('file-input').click(); }
 
-function updateFileList() {
-  const el = document.getElementById('file-list');
-  el.innerHTML = '';
+function updateFileSelect() {
+  const sel = document.getElementById('file-select');
+  sel.innerHTML = '';
+  if (loadedFiles.length === 0) {
+    sel.disabled = true;
+    sel.innerHTML = '<option value="">— no file loaded —</option>';
+    return;
+  }
   loadedFiles.forEach(name => {
-    const d = document.createElement('div');
-    d.className = 'file-entry';
-    d.textContent = name; d.title = name;
-    d.onclick = () => selectFile(name);
-    el.appendChild(d);
+    const opt = document.createElement('option');
+    opt.value = name; opt.textContent = name;
+    sel.appendChild(opt);
   });
+  sel.disabled = false;
+}
+
+function autoSelectFile() {
+  if (loadedFiles.length === 0) return;
+  const main = loadedFiles.find(n => n.toUpperCase().endsWith('.MAIN'));
+  const name = main ?? (loadedFiles.length === 1 ? loadedFiles[0] : null);
+  if (name) { document.getElementById('file-select').value = name; selectFile(name); }
 }
 
 function selectFile(name) {
-  document.querySelectorAll('.file-entry').forEach(e => {
-    e.classList.toggle('selected', e.textContent === name);
-  });
+  if (!name) return;
   parseAndLoad(name);
 }
 
+function flattenIncludes(stmts) {
+  // Recursively expand include statements so the whole program is a flat list.
+  // This lets GOTO/GOSUB find labels across file boundaries.
+  const result = [];
+  for (const s of stmts) {
+    if (!s) continue;
+    if (s.type === 'include') { result.push(...flattenIncludes(s.body)); }
+    else { result.push(s); }
+  }
+  return result;
+}
+
 function parseAndLoad(name) {
-  consoleLog(`parsing ${name}…`);
+  console.log(`parsing ${name}…`);
   try {
-    currentProgram = parser.parse(files[name], {
+    const raw = parser.parse(files[name], {
       parseFile: inc => {
-        if (files[inc]) { consoleLog(`  ↳ ${inc}`); return parser.parse(files[inc], {parseFile: () => []}); }
-        consoleLog(`  [not found: ${inc}]`); return [];
+        const key = inc.trim();
+        if (files[key]) { console.log(`  ↳ ${key}`); return parser.parse(files[key], {parseFile: inner => {
+          const k2 = inner.trim();
+          if (files[k2]) { console.log(`    ↳ ${k2}`); return parser.parse(files[k2], {parseFile: () => []}); }
+          console.log(`    [not found: ${inner}]`); return [];
+        }}); }
+        console.log(`  [not found: ${inc}]`); return [];
       }
     });
-    consoleLog(`ok — ${currentProgram.length} statements\n`);
+    currentProgram = flattenIncludes(raw);
+    console.log(`ok — ${currentProgram.length} statements (${raw.length} before flatten)`);
     document.getElementById('btn-run').disabled = false;
   } catch(err) {
     const loc = err.location;
-    consoleLog(loc ? `✗ ${loc.start.line}:${loc.start.column} ${err.message}\n` : `✗ ${err.message}\n`);
+    console.error(loc ? `✗ ${loc.start.line}:${loc.start.column} ${err.message}` : `✗ ${err.message}`);
     currentProgram = null;
     document.getElementById('btn-run').disabled = true;
   }
-}
-
-// ── Console ───────────────────────────────────────────────────
-function consoleLog(msg) {
-  const el = document.getElementById('console-output');
-  el.textContent += msg + '\n';
-  el.scrollTop = el.scrollHeight;
 }
 
 // ── Event system ──────────────────────────────────────────────
@@ -332,7 +611,8 @@ function pushEvent(type, data = {}) {
   else eventQueue.push(evt);
 }
 async function waitForEvent(timeoutMs) {
-  if (stopRequested) throw new Error('USER_STOP');
+  if (stopRequested && !onStopHandler) throw new Error('USER_STOP');
+  if (stopRequested && onStopHandler) { stopRequested = false; return {type: 'stop'}; }
   if (eventQueue.length > 0) return eventQueue.shift();
   return new Promise((resolve, reject) => {
     eventWaiter = resolve;
@@ -347,13 +627,18 @@ function clearEvents() { eventQueue = []; eventWaiter = null; }
 const menuDefs = {};
 let lastMenu = 0, lastItem = 0;
 
-function setMenu(menuId, itemId, enabled, title) {
-  if (!menuDefs[menuId]) menuDefs[menuId] = {title: '', enabled: true, items: {}};
+function setMenu(menuId, itemId, state, title) {
+  if (!menuDefs[menuId]) menuDefs[menuId] = {title: '', enabled: true, checked: false, items: {}};
   if (itemId === 0) {
-    menuDefs[menuId].title = String(title ?? '');
-    menuDefs[menuId].enabled = !!enabled;
+    menuDefs[menuId].title   = String(title ?? '');
+    menuDefs[menuId].enabled = state !== 0;
+    menuDefs[menuId].checked = state === 2;
   } else {
-    menuDefs[menuId].items[itemId] = {title: String(title ?? ''), enabled: !!enabled};
+    menuDefs[menuId].items[itemId] = {
+      title:   String(title ?? ''),
+      enabled: state !== 0,
+      checked: state === 2,
+    };
   }
   renderMenuBar();
 }
@@ -361,7 +646,7 @@ function setMenu(menuId, itemId, enabled, title) {
 function renderMenuBar() {
   const bar = document.getElementById('dynamic-menubar');
   bar.innerHTML = '';
-  const ids = Object.keys(menuDefs).map(Number).sort((a,b) => a - b);
+  const ids = Object.keys(menuDefs).map(Number).sort((a,b) => (a===255?-1:b===255?1:a-b));
   const hasAny = ids.some(id => menuDefs[id].title);
   bar.classList.toggle('active', hasAny);
   for (const mid of ids) {
@@ -369,7 +654,11 @@ function renderMenuBar() {
     if (!m.title) continue;
     const wrap = document.createElement('div');
     wrap.className = 'dyn-menu';
-    wrap.textContent = m.title;
+    wrap.dataset.menuId = mid;
+    const titleSpan = document.createElement('span');
+    titleSpan.textContent = m.title;
+    if (mid === 255) titleSpan.style.filter = 'grayscale(1)';
+    wrap.appendChild(titleSpan);
     const drop = document.createElement('div');
     drop.className = 'dyn-menu-drop';
     const iids = Object.keys(m.items).map(Number).sort((a,b) => a - b);
@@ -380,7 +669,7 @@ function renderMenuBar() {
       if (isSep) { el.className = 'dyn-menu-item sep'; }
       else {
         el.className = 'dyn-menu-item' + (it.enabled ? '' : ' dis');
-        el.textContent = it.title;
+        el.textContent = (it.checked ? '✓ ' : '    ') + it.title;
         const _mid = mid, _iid = iid;
         el.addEventListener('click', e => {
           e.stopPropagation();
@@ -398,6 +687,12 @@ function renderMenuBar() {
       document.querySelectorAll('.dyn-menu.open').forEach(x => x.classList.remove('open'));
       if (!wasOpen) wrap.classList.add('open');
     });
+    wrap.addEventListener('mouseover', () => {
+      if (bar.querySelector('.dyn-menu.open') && !wrap.classList.contains('open')) {
+        document.querySelectorAll('.dyn-menu.open').forEach(x => x.classList.remove('open'));
+        wrap.classList.add('open');
+      }
+    });
     bar.appendChild(wrap);
   }
 }
@@ -409,70 +704,266 @@ let globalVars = {};
 let dataStore = [];
 let dataPtr = 0;
 let funcDefs = {};
+const debugMode = false;
+const fnPtrTable = {};  // handle → function name, for @ operator
+let nextFnPtrHandle = 1;
+
+// ── Mac controls (BUTTON / SCROLL BUTTON / EDIT FIELD) ────────
+const controlStore = {};
+let currentEditField = null;
+let lastDialogId = 0;
+
+function ctrlWdef() {
+  const wid = outputWindowId ?? frontWindowId;
+  return wid != null ? windowDefs[wid] : null;
+}
+function placeCtrl(el, x1, y1, x2, y2) {
+  const wdef = ctrlWdef();
+  if (!wdef) return;
+  const cw = wdef.logW ?? (wdef.canvas.width / CANVAS_SCALE);
+  const ch = wdef.logH ?? (wdef.canvas.height / CANVAS_SCALE);
+  Object.assign(el.style, {
+    left: `${x1/cw*100}%`, top: `${y1/ch*100}%`,
+    width: `${Math.max(0,x2-x1)/cw*100}%`, height: `${Math.max(0,y2-y1)/ch*100}%`,
+  });
+}
+function destroyCtrl(id) {
+  if (controlStore[id]) { controlStore[id].el?.remove(); delete controlStore[id]; }
+}
+function destroyAllCtrls() {
+  Object.keys(controlStore).forEach(k => { controlStore[k].el?.remove(); delete controlStore[k]; });
+  currentEditField = null; lastDialogId = 0;
+}
+async function resolveCtrlRect(arg, env) {
+  if (!arg) return null;
+  if (arg.from) {
+    return [
+      Math.floor(Number(await evalExpr(arg.from[0], env))),
+      Math.floor(Number(await evalExpr(arg.from[1], env))),
+      Math.floor(Number(await evalExpr(arg.to[0], env))),
+      Math.floor(Number(await evalExpr(arg.to[1], env))),
+    ];
+  }
+  const v = Math.floor(Number(await evalExpr(arg, env)));
+  const varName = fnPtrTable[v];
+  if (!varName) return null;
+  const arr = env[varName] ?? globalVars[varName];
+  if (!Array.isArray(arr)) return null;
+  return [Number(arr[0])||0, Number(arr[1])||0, Number(arr[2])||0, Number(arr[3])||0];
+}
+
+function stmtSummary(stmt) {
+  switch (stmt.type) {
+    case 'label':         return `[${stmt.label}:]`;
+    case 'include':       return `↳ ${stmt.file ?? '(include)'}`;
+    default:              return null;
+  }
+}
 
 let penX = 0, penY = 0, penWidth = 1, penHeight = 1;
+let gfxPenX = 0, gfxPenY = 0;  // pen position after last text draw (for GETPEN)
+let gfxPenMode = 8;   // 8=patCopy (normal), 10=patXor (rubber-band XOR)
+let xorSnapshot = null; // ImageData snapshot for XOR rubber-band restore
 let currentFg = '#000000', currentBg = '#ffffff';
+const spriteBuffer = {};
 let textSize = 12, textX = 1, textY = 12;
 let yieldCounter = 0;
 
+let onMenuHandler = null;
+let onDialogHandler = null;
+let onMouseHandler = null;
+let onTimerHandler = null;
+let onEventHandler = null;
+let onStopHandler = null;
+let handlerDepth = 0;
+let dialogOn = false;
+let mouseOn = false;
+let timerInterval = 0;
+let timerHandle = null;
+let timerOn = false; // gate: whether TIMER ON has been called
+let currentDialogEventCode = null; // event code when executing inside a handler
+let currentDialogEvent = null;     // full event object for DIALOG(n) reference lookups
+
+// ── Region store (fake Mac region handles) ────────────────────
+const regionStore = {};   // handle -> { left, top, right, bottom } | null
+let nextRegionHandle = 1000;
+let clipStack = [];       // saved clip states (ctx.save depth)
+
+function newRegion() {
+  const h = nextRegionHandle++;
+  regionStore[h] = null;
+  return h;
+}
+function setRegionRect(h, left, top, right, bottom) {
+  regionStore[h] = { left, top, right, bottom };
+}
+function applyClip(h) {
+  if (!ctx) return;
+  // restore any previous clip first
+  while (clipStack.length) { ctx.restore(); clipStack.pop(); }
+  const r = regionStore[h];
+  if (r) {
+    ctx.save();
+    clipStack.push(1);
+    ctx.beginPath();
+    ctx.rect(r.left, r.top, r.right - r.left, r.bottom - r.top);
+    ctx.clip();
+  }
+}
+function resetClip() {
+  if (!ctx) return;
+  while (clipStack.length) { ctx.restore(); clipStack.pop(); }
+}
+
 async function maybeYield() {
-  if (stopRequested) throw new Error('USER_STOP');
-  if (++yieldCounter % 500 === 0) await new Promise(r => setTimeout(r, 0));
+  if (stopRequested) {
+    if (onStopHandler && handlerDepth === 0) {
+      stopRequested = false;
+      handlerDepth++;
+      try { await callEventHandler(onStopHandler); }
+      finally { handlerDepth--; }
+    } else {
+      throw new Error('USER_STOP');
+    }
+  }
+  if (++yieldCounter % 500 === 0) {
+    await new Promise(r => setTimeout(r, 0));
+    await fireEventHandlers();
+  }
+}
+
+async function fireEventHandlers() {
+  while (eventQueue.length > 0) {
+    const evt = eventQueue[0];
+    let lbl = null, evtCode = 0;
+    if (evt.type === 'menu' && onMenuHandler) {
+      eventQueue.shift();
+      lastMenu = evt.menu; lastItem = evt.item;
+      lbl = onMenuHandler;
+      evtCode = 5; // Mac menuEvt code
+    } else if (evt.type === 'mouse' && onMouseHandler) {
+      eventQueue.shift();
+      lbl = onMouseHandler;
+      evtCode = 1; // Mac mouseDown code
+    } else if (evt.type === 'timer' && onTimerHandler) {
+      eventQueue.shift();
+      lbl = onTimerHandler;
+    } else if ((evt.type === 'button' || evt.type === 'editfield') && onDialogHandler) {
+      eventQueue.shift();
+      evtCode = evt.code ?? (evt.type === 'button' ? 1 : 2);
+      lastDialogId = evt.id ?? lastDialogId;
+      evt.ref = lastDialogId;
+      lbl = onDialogHandler;
+    } else if (onDialogHandler) {
+      eventQueue.shift();
+      evtCode = evt.code ?? 0;
+      lbl = onDialogHandler;
+    } else {
+      break;
+    }
+    handlerDepth++;
+    const prevCode = currentDialogEventCode;
+    const prevEvt = currentDialogEvent;
+    currentDialogEventCode = evtCode;
+    currentDialogEvent = evt;
+    try { await callEventHandler(lbl); }
+    finally { handlerDepth--; currentDialogEventCode = prevCode; currentDialogEvent = prevEvt; }
+  }
+}
+
+async function callEventHandler(lbl) {
+  const stmts = currentProgram;
+  const idx = stmts.findIndex(s => s && s.type === 'label' && s.label.toLowerCase() === lbl);
+  if (idx < 0) { if (debugMode) console.log(`▶ GOSUB [${lbl}] — label not found`); return; }
+  if (debugMode) console.log(`▶ GOSUB → [${lbl}:]`);
+  let i = idx + 1;
+  while (i < stmts.length) {
+    if (stopRequested) throw new Error('USER_STOP');
+    const s = stmts[i];
+    if (!s) { i++; continue; }
+    try {
+      const r = await execStmt(s, globalVars);
+      if (r instanceof ReturnSignal) return;
+    } catch(e) {
+      if (e instanceof ReturnSignal) return;
+      if (e instanceof GotoSignal) {
+        const li = stmts.findIndex(x => x && x.type === 'label' && x.label.toLowerCase() === e.label);
+        if (li >= 0) { i = li + 1; continue; }
+        throw e;
+      }
+      if (e instanceof GosubSignal) {
+        await callEventHandler(e.label);
+        i++; continue;
+      }
+      throw e;
+    }
+    i++;
+  }
 }
 
 class GotoSignal  { constructor(l) { this.label = l; } }
 class GosubSignal { constructor(l) { this.label = l; } }
 class ReturnSignal {}
 
-// ── Run / Stop / Reset ────────────────────────────────────────
+function labelOf(node) {
+  return node.value.toLowerCase();
+}
+
+// ── Run / Stop ────────────────────────────────────────────────
+function toggleRun() { if (running) stopProgram(); else runProgram(); }
+
 async function runProgram() {
   if (!currentProgram || running) return;
   running = true; stopRequested = false;
-  document.getElementById('btn-run').disabled = true;
-  document.getElementById('btn-stop').disabled = false;
-  document.getElementById('btn-stop').classList.add('stop-active');
+  const btnRun = document.getElementById('btn-run');
+  btnRun.textContent = 'Stop'; btnRun.classList.add('running');
 
   globalVars = {}; dataStore = []; dataPtr = 0; funcDefs = {};
+  Object.keys(fnPtrTable).forEach(k => delete fnPtrTable[k]); nextFnPtrHandle = 1;
+  destroyAllCtrls();
+  onMenuHandler = null; onDialogHandler = null; onMouseHandler = null;
+  onTimerHandler = null; onEventHandler = null; onStopHandler = null;
+  handlerDepth = 0; dialogOn = false; mouseOn = false; timerOn = false; currentDialogEventCode = null; currentDialogEvent = null;
+  if (timerHandle) { clearInterval(timerHandle); timerHandle = null; } timerInterval = 0;
+  Object.keys(regionStore).forEach(k => delete regionStore[k]);
+  nextRegionHandle = 1000; clipStack = [];
+  Object.keys(teHandleMap).forEach(k => delete teHandleMap[k]);
+  fakeMemBlocks.length = 0; nextFakeAddr = 0x10000;
   clearEvents();
   Object.keys(menuDefs).forEach(k => delete menuDefs[k]);
   renderMenuBar();
+  Object.values(windowDefs).forEach(w => w.container.remove());
+  Object.keys(windowDefs).forEach(k => delete windowDefs[k]);
+  frontWindowId = null; outputWindowId = null; canvas = null; ctx = null;
+  renderTabs();
   currentFg = '#000000'; currentBg = '#ffffff';
   penX = 0; penY = 0; penWidth = 1; penHeight = 1;
+  gfxPenMode = 8; xorSnapshot = null;
   textX = 1; textY = textSize; yieldCounter = 0;
+  mouseDown = false; mouseX = 0; mouseY = 0; mousePrevDown = false; mouseLastPressTime = 0;
 
   collectPass(currentProgram, funcDefs, dataStore);
-  resizeCanvas(512, 342);
+  getOrCreateWindow(1, null, 512, 342);
+  setOutputWindow(1);
 
   try {
     await execBlock(currentProgram, globalVars);
-    consoleLog('ended.');
+    console.log('ended.');
   } catch(e) {
-    if (e.message === 'END' || e.message === 'STOP') consoleLog('stopped.');
-    else if (e.message === 'USER_STOP') consoleLog('interrupted.');
-    else { consoleLog(`error: ${e.message}`); console.error(e); }
+    if (e.message === 'END' || e.message === 'STOP') console.log('stopped.');
+    else if (e.message === 'USER_STOP') console.log('interrupted.');
+    else if (e instanceof GotoSignal) console.error(`GOTO label not found: "${e.label}"`);
+    else if (e instanceof GosubSignal) console.error(`GOSUB label not found: "${e.label}"`);
+    else console.error(e);
   }
 
   running = false;
-  document.getElementById('btn-run').disabled = false;
-  document.getElementById('btn-stop').disabled = true;
-  document.getElementById('btn-stop').classList.remove('stop-active');
+  btnRun.textContent = 'Run'; btnRun.classList.remove('running');
 }
 
 function stopProgram() {
   stopRequested = true;
   if (eventWaiter) { const w = eventWaiter; eventWaiter = null; w({type: 'stop'}); }
-}
-
-function resetAll() {
-  stopProgram();
-  setTimeout(() => {
-    hideCanvas();
-    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
-    clearEvents();
-    Object.keys(menuDefs).forEach(k => delete menuDefs[k]);
-    renderMenuBar();
-    document.getElementById('console-output').textContent = '';
-  }, 50);
 }
 
 // ── Collect pass (DATA + fn defs) ─────────────────────────────
@@ -481,11 +972,12 @@ function collectPass(stmts, fns, data) {
   for (const s of stmts) {
     if (!s) continue;
     if (s.type === 'data') { for (const it of s.items) data.push(evalConstant(it)); }
-    else if (s.type === 'function' || s.type === 'localFunction') { fns[s.name.toLowerCase()] = s; collectPass(s.body, fns, data); }
-    else if (s.type === 'defFn') { fns[s.name.toLowerCase()] = s; }
+    else if (s.type === 'function' || s.type === 'localFunction') { fns[s.name] = s; collectPass(s.body, fns, data); }
+    else if (s.type === 'defFn') { fns[s.name] = s; }
     else if (s.type === 'if') { collectPass(s.body, fns, data); if (s.else) collectPass(s.else, fns, data); }
     else if (s.type === 'for' || s.type === 'while' || s.type === 'do_while') collectPass(s.body, fns, data);
     else if (s.type === 'select') { for (const c of s.cases) collectPass(c.body, fns, data); }
+    else if (s.type === 'include') collectPass(s.body, fns, data);
   }
 }
 
@@ -510,12 +1002,13 @@ async function execBlock(stmts, env) {
     } catch(e) {
       if (e instanceof GotoSignal) {
         const idx = stmts.findIndex(s => s && s.type === 'label' && s.label.toLowerCase() === e.label);
-        if (idx >= 0) { i = idx + 1; continue; }
+        if (idx >= 0) { if (debugMode) console.log(`▶ GOTO [${e.label}:]`); i = idx + 1; continue; }
         throw e;
       }
       if (e instanceof GosubSignal) {
         const idx = stmts.findIndex(s => s && s.type === 'label' && s.label.toLowerCase() === e.label);
         if (idx >= 0) {
+          if (debugMode) console.log(`▶ GOSUB → [${e.label}:]`);
           let j = idx + 1;
           gosub_inner: while (j < stmts.length) {
             await maybeYield();
@@ -528,12 +1021,12 @@ async function execBlock(stmts, env) {
               if (e2 instanceof ReturnSignal) break;
               if (e2 instanceof GotoSignal) {
                 const li = stmts.findIndex(s => s && s.type === 'label' && s.label.toLowerCase() === e2.label);
-                if (li >= 0) { j = li + 1; continue gosub_inner; }
+                if (li >= 0) { if (debugMode) console.log(`▶ GOTO [${e2.label}:]`); j = li + 1; continue gosub_inner; }
                 throw e2;
               }
               if (e2 instanceof GosubSignal) {
-                const ni = stmts.findIndex(s => s && s.type === 'label' && s.label.toLowerCase() === e2.label);
-                if (ni >= 0) { await execBlock(stmts.slice(ni + 1), env); break; }
+                const ni = currentProgram.findIndex(s => s && s.type === 'label' && s.label.toLowerCase() === e2.label);
+                if (ni >= 0) { await callEventHandler(e2.label); j++; continue gosub_inner; }
                 throw e2;
               }
               throw e2;
@@ -553,6 +1046,7 @@ async function execBlock(stmts, env) {
 // ── Statement dispatcher ──────────────────────────────────────
 async function execStmt(stmt, env) {
   if (!stmt) return;
+  if (debugMode) { const s = stmtSummary(stmt); if (s) console.log(`▶ ${s}`); }
   switch (stmt.type) {
     case 'assign':        return execAssign(stmt, env);
     case 'print':         return execPrint(stmt, env);
@@ -563,23 +1057,55 @@ async function execStmt(stmt, env) {
     case 'do_while':      return execDoWhile(stmt, env);
     case 'select':        return execSelect(stmt, env);
     case 'on':            return execOn(stmt, env);
+    case 'onEvent': {
+      const lbl = labelOf(stmt.handler);
+      if (stmt.event === 'MENU') onMenuHandler = lbl;
+      else if (stmt.event === 'DIALOG') onDialogHandler = lbl;
+      else if (stmt.event === 'MOUSE') onMouseHandler = lbl;
+      else if (stmt.event === 'TIMER') {
+        onTimerHandler = lbl;
+        if (stmt.interval !== undefined) {
+          const ms = Math.round(Math.abs(Number(await evalExpr(stmt.interval, env))) * 1000 / 60);
+          timerInterval = ms > 0 ? ms : 1000;
+        }
+        // Start the timer interval now; events are gated by timerOn flag
+        if (timerHandle) clearInterval(timerHandle);
+        const ms = timerInterval > 0 ? timerInterval : 1000;
+        timerHandle = setInterval(() => { if (running && timerOn) pushEvent('timer'); }, ms);
+      }
+      else if (stmt.event === 'EVENT') onEventHandler = lbl;
+      else if (stmt.event === 'STOP') onStopHandler = lbl;
+      return;
+    }
     case 'procedureCall': return execProcCall(stmt, env);
     case 'userFuncCall':  return execUserFuncCall(stmt, env);
     case 'exprStmt':      await evalExpr(stmt.expr, env); return;
     case 'include':       return execBlock(stmt.body, env);
     case 'end':           throw new Error('END');
-    case 'function': case 'localFunction': funcDefs[stmt.name.toLowerCase()] = stmt; return;
-    case 'defFn': funcDefs[stmt.name.toLowerCase()] = stmt; return;
+    case 'function': case 'localFunction': funcDefs[stmt.name] = stmt; return;
+    case 'defFn': funcDefs[stmt.name] = stmt; return;
     case 'dim': return execDim(stmt, env);
-    // silently ignore compile-time / unsupported
-    default: return;
+    case 'def': case 'defCmd': return;  // compiler directives — ignored at runtime
+    case 'label': case 'data': case 'comment': case 'remark': return;  // not executable
+    default: console.log(`unsupported stmt: ${stmt.type}`); return;
   }
 }
 
 // ── assign ────────────────────────────────────────────────────
+function writeVar(env, name, val) {
+  // In ZBasic, variables are global unless they're function parameters (own properties of local env).
+  // If the name is an own property of env (i.e., a parameter or locally declared var), write there.
+  // Otherwise write to globalVars so user functions can modify shared state.
+  if (env === globalVars || Object.prototype.hasOwnProperty.call(env, name)) {
+    env[name] = val;
+  } else {
+    globalVars[name] = val;
+  }
+}
+
 async function execAssign(stmt, env) {
   const val = await evalExpr(stmt.value, env);
-  const name = stmt.name.toLowerCase();
+  const name = stmt.name;
   if (stmt.idx) {
     const arr = env[name] ?? globalVars[name];
     const idxs = await Promise.all(stmt.idx.map(x => evalExpr(x, env)));
@@ -591,24 +1117,27 @@ async function execAssign(stmt, env) {
     return;
   }
   if (stmt.fields && stmt.fields.length > 0) {
-    if (!env[name]) env[name] = {};
-    let obj = env[name];
+    const target = env[name] ?? globalVars[name] ?? {};
+    writeVar(env, name, target);
+    let obj = target;
     for (let i = 0; i < stmt.fields.length - 1; i++) obj = obj[stmt.fields[i]] || (obj[stmt.fields[i]] = {});
     obj[stmt.fields[stmt.fields.length - 1]] = val;
     return;
   }
-  env[name] = val;
+  writeVar(env, name, val);
 }
 
 // ── dim ───────────────────────────────────────────────────────
 async function execDim(stmt, env) {
   for (const a of stmt.args) {
-    const name = a.name.toLowerCase();
+    const name = a.name;
     if (a.dims && a.dims.length > 0) {
       const sizes = await Promise.all(a.dims.map(d => evalExpr(d, env)));
-      env[name] = makeArray(sizes);
+      writeVar(env, name, makeArray(sizes));
     } else {
-      if (!(name in env)) env[name] = null;
+      // Only initialize if not already set (DIM without size is just a declaration)
+      if (!(name in globalVars) && !Object.prototype.hasOwnProperty.call(env, name))
+        writeVar(env, name, null);
     }
   }
 }
@@ -628,20 +1157,25 @@ async function execPrint(stmt, env) {
   const text = parts.join('');
   const mode = stmt.mode;
 
-  if (mode.type === '#') { consoleLog(text); return; }
-  if (mode.type === '%' || mode.type === '@') {
-    const cx = await evalExpr(mode.coord.x, env);
-    const cy = await evalExpr(mode.coord.y, env);
-    gfxText(text, cx, cy); return;
+  if (mode.type === '#') { console.log(text); return; }
+  if (mode.type === '%') {
+    gfxText(text, await evalExpr(mode.coord.x, env), await evalExpr(mode.coord.y, env)); return;
+  }
+  if (mode.type === '@') {
+    const col = await evalExpr(mode.coord.x, env);
+    const row = await evalExpr(mode.coord.y, env);
+    gfxText(text, col * Math.round(textSize * 0.6), row * (textSize + 4)); return;
   }
   // plain PRINT — send to console
-  consoleLog(text);
+  console.log(text);
 }
 
 function gfxText(txt, x, y) {
   ctx.fillStyle = currentFg;
   ctx.font = `${textSize}px monospace`;
   ctx.fillText(txt, x, y);
+  gfxPenX = x + ctx.measureText(txt).width;
+  gfxPenY = y;
 }
 
 // ── sys calls ─────────────────────────────────────────────────
@@ -657,6 +1191,7 @@ async function execSysCall(stmt, env) {
   switch(cmd) {
     // ── graphics ────────────────────────────────────────────
     case 'CLS': case 'HOME': {
+      if (!ctx) { getOrCreateWindow(1, null, 512, 342); setOutputWindow(1); }
       showCanvas();
       ctx.fillStyle = currentBg; ctx.fillRect(0, 0, canvas.width, canvas.height);
       textX = 1; textY = textSize; return;
@@ -674,6 +1209,21 @@ async function execSysCall(stmt, env) {
     case 'PEN': {
       const v = await n(0);
       if (v !== 0) { penWidth = v; penHeight = v; }
+      if (args.length >= 2) { const h = await n(1); if (h !== 0) penHeight = h; }
+      if (args.length >= 4) {
+        const mode = Math.round(await n(3));
+        if (mode === 10 && gfxPenMode !== 10) {
+          // Entering XOR mode: take clean-canvas snapshot
+          gfxPenMode = 10;
+          if (!xorSnapshot) xorSnapshot = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        } else if (mode !== 10 && gfxPenMode === 10) {
+          // Leaving XOR mode: restore snapshot (erase rubber-band line)
+          gfxPenMode = mode;
+          if (xorSnapshot) { ctx.putImageData(xorSnapshot, 0, 0); xorSnapshot = null; }
+        } else {
+          gfxPenMode = mode;
+        }
+      }
       ctx.lineWidth = penWidth;
       return;
     }
@@ -745,35 +1295,172 @@ async function execSysCall(stmt, env) {
     case 'TEXT': {
       showCanvas();
       const a0 = args[0];
-      let tx, ty, txt;
       if (a0 && a0.x !== undefined) {
-        tx = await evalExpr(a0.x, env); ty = await evalExpr(a0.y, env); txt = await s(1);
-      } else { tx = await n(0); ty = await n(1); txt = await s(2); }
-      gfxText(txt, tx, ty); return;
+        // TEXT (x,y), string — draw text at pixel coordinates
+        gfxText(await s(1), await evalExpr(a0.x, env), await evalExpr(a0.y, env));
+      } else {
+        // TEXT font, size [, style [, mode]] — set font attributes
+        if (args[1]) textSize = Math.max(1, await n(1));
+      }
+      return;
     }
 
-    case 'SCROLL': return;
+    case 'SCROLL': {
+      if (stmt.keyword === 'BUTTON') {
+        // SCROLL BUTTON id, value, min, max, pageSize [, refCon [, type 1=vert 2=horiz]]
+        const id = Math.floor(await n(0));
+        const value = Math.floor(await n(1));
+        const min = Math.floor(await n(2));
+        const max = Math.floor(await n(3));
+        const pageSize = args[4] ? Math.floor(await n(4)) : 10;
+        const scrollType = args[6] ? Math.floor(await n(6)) : 1;
+        if (controlStore[id]) Object.assign(controlStore[id], {value, min, max, pageSize});
+        else controlStore[id] = {el: null, type: scrollType === 2 ? 'hscroll' : 'vscroll', value, min, max, pageSize};
+        return;
+      }
+      if (!ctx) return;
+      const dh = await n(0), dv = await n(1);
+      const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      ctx.clearRect(0, 0, canvas.width / CANVAS_SCALE, canvas.height / CANVAS_SCALE);
+      ctx.putImageData(img, dh * CANVAS_SCALE, dv * CANVAS_SCALE);
+      return;
+    }
+
+    case 'GET': {
+      // GET (x1,y1)-(x2,y2), ArrayName(index) — capture screen region to sprite buffer
+      if (!ctx) return;
+      const a0 = args[0], a1 = args[1];
+      if (!a0 || !a1) return;
+      const ev = x => (x && typeof x === 'object') ? evalExpr(x, env) : Promise.resolve(Number(x));
+      const x1 = Math.floor(Number(await ev(a0.from?.[0]))), y1 = Math.floor(Number(await ev(a0.from?.[1])));
+      const x2 = Math.floor(Number(await ev(a0.to?.[0]))),  y2 = Math.floor(Number(await ev(a0.to?.[1])));
+      const sx = Math.min(x1, x2), sy = Math.min(y1, y2);
+      const w = Math.abs(x2 - x1) + 1, h = Math.abs(y2 - y1) + 1;
+      if (a1.type === 'callable' || a1.type === 'variable') {
+        const idx = a1.args?.[0] ? Math.floor(Number(await evalExpr(a1.args[0], env))) : 0;
+        spriteBuffer[`${a1.name}_${idx}`] = ctx.getImageData(sx * CANVAS_SCALE, sy * CANVAS_SCALE, w * CANVAS_SCALE, h * CANVAS_SCALE);
+      }
+      return;
+    }
+
+    case 'PUT': {
+      // PUT (x,y), ArrayName(index) [,mode]  — draw sprite from buffer at position
+      // PUT (x1,y1)-(x2,y2), ArrayName(index) [,mode]  — draw into rect
+      if (!ctx) return;
+      const a0 = args[0], a1 = args[1];
+      if (!a0 || !a1) return;
+      let dx, dy;
+      if (a0.x !== undefined) {
+        dx = Math.floor(Number(await evalExpr(a0.x, env)));
+        dy = Math.floor(Number(await evalExpr(a0.y, env)));
+      } else if (a0.from) {
+        dx = Math.floor(Number(await evalExpr(a0.from[0], env)));
+        dy = Math.floor(Number(await evalExpr(a0.from[1], env)));
+      } else return;
+      if (a1.type === 'callable' || a1.type === 'variable') {
+        const idx = a1.args?.[0] ? Math.floor(Number(await evalExpr(a1.args[0], env))) : 0;
+        const imgData = spriteBuffer[`${a1.name}_${idx}`];
+        if (imgData) ctx.putImageData(imgData, dx * CANVAS_SCALE, dy * CANVAS_SCALE);
+      }
+      return;
+    }
+
+    case 'LOCAL': {
+      // LOCAL var1, var2, ... — shadow parent-scope variables in this env
+      for (const arg of args) {
+        if (!arg) continue;
+        const name = arg.name;
+        if (name && !Object.prototype.hasOwnProperty.call(env, name))
+          env[name] = name.endsWith('$') ? '' : 0;
+      }
+      return;
+    }
+    case 'CLEAR LOCAL': {
+      // CLEAR LOCAL — reset local variables to default in this env
+      for (const key of Object.keys(env)) {
+        env[key] = String(key).endsWith('$') ? '' : 0;
+      }
+      return;
+    }
+    case 'CLEAR': return;  // CLEAR — no-op in browser context
 
     case 'WINDOW': {
+      if (stmt.keyword === 'OFF' || stmt.keyword === 'ON') { return; }  // show/hide windowing system
+      if (stmt.keyword === 'CLOSE') {
+        let wid;
+        if (args[0]?.type === 'channel') {
+          wid = Math.floor(Number(await evalExpr(args[0].n, env)));
+        } else {
+          wid = args[0] ? Math.floor(Number(await evalExpr(args[0], env))) : outputWindowId;
+        }
+        if (windowDefs[wid]) {
+          windowDefs[wid].container.remove();
+          delete windowDefs[wid];
+          renderTabs();
+          if (outputWindowId === wid) { outputWindowId = null; canvas = null; ctx = null; }
+          if (frontWindowId === wid) frontWindowId = null;
+        }
+        return;
+      }
+      if (stmt.keyword === 'OUTPUT') {
+        const wid = args[0] ? Math.floor(Number(await evalExpr(args[0], env))) : 1;
+        setOutputWindow(wid);
+        return;
+      }
       const a0 = args[0];
-      if (a0 && a0.from) {
+      if (stmt.chan) {
+        // WINDOW #N [, title [, (x1,y1)-(x2,y2) [, type]]]
+        const wid = Math.floor(Number(await evalExpr(stmt.chan, env)));
+        if (!a0) {
+          // WINDOW #N — bring existing window to front
+          if (windowDefs[wid]) { bringToFront(wid); }
+          setOutputWindow(wid);
+        } else {
+          const title = a0 ? String(await evalExpr(a0, env)) : null;
+          let w = 512, h = 342;
+          if (args[1] && args[1].from) {
+            const ev = async x => typeof x === 'object' ? evalExpr(x, env) : x;
+            const x1 = await ev(args[1].from[0]), y1 = await ev(args[1].from[1]);
+            const x2 = await ev(args[1].to[0]),   y2 = await ev(args[1].to[1]);
+            w = x2 - x1; h = y2 - y1;
+          }
+          getOrCreateWindow(wid, title, w, h);
+          setOutputWindow(wid);
+          if (title) document.title = title;
+        }
+      } else if (a0 && a0.from) {
+        // WINDOW (x1,y1)-(x2,y2)
         const ev = async x => typeof x === 'object' ? evalExpr(x, env) : x;
         const x1 = await ev(a0.from[0]), y1 = await ev(a0.from[1]);
         const x2 = await ev(a0.to[0]),   y2 = await ev(a0.to[1]);
-        resizeCanvas(x2 - x1, y2 - y1);
+        getOrCreateWindow(outputWindowId || 1, null, x2 - x1, y2 - y1);
+        setOutputWindow(outputWindowId || 1);
+      } else if (a0 && !a0.from) {
+        // WINDOW id [, title [, (x1,y1)-(x2,y2) [, type]]]
+        const wid = Math.floor(Number(await evalExpr(a0, env))) || 1;
+        if (args.length === 1 && windowDefs[wid]) {
+          // WINDOW ref — just bring existing window to front
+          bringToFront(wid); setOutputWindow(wid);
+        } else {
+          const title = args[1] ? String(await evalExpr(args[1], env)) : null;
+          let w = 512, h = 342;
+          if (args[2] && args[2].from) {
+            const ev = async x => typeof x === 'object' ? evalExpr(x, env) : x;
+            const x1 = await ev(args[2].from[0]), y1 = await ev(args[2].from[1]);
+            const x2 = await ev(args[2].to[0]),   y2 = await ev(args[2].to[1]);
+            w = x2 - x1; h = y2 - y1;
+          }
+          getOrCreateWindow(wid, title, w, h);
+          setOutputWindow(wid);
+          if (title) document.title = title;
+        }
       }
       showCanvas(); return;
     }
 
     // ── control ──────────────────────────────────────────────
-    case 'GOTO': {
-      const lbl = String(await evalExpr(args[0], env)).toLowerCase();
-      throw new GotoSignal(lbl);
-    }
-    case 'GOSUB': {
-      const lbl = String(await evalExpr(args[0], env)).toLowerCase();
-      throw new GosubSignal(lbl);
-    }
+    case 'GOTO':  throw new GotoSignal(labelOf(args[0]));
+    case 'GOSUB': throw new GosubSignal(labelOf(args[0]));
     case 'RETURN': throw new ReturnSignal();
     case 'STOP':   throw new Error('STOP');
 
@@ -781,41 +1468,62 @@ async function execSysCall(stmt, env) {
     case 'READ': {
       for (const arg of args) {
         if (!arg) continue;
-        const name = arg.type === 'variable' ? arg.name.toLowerCase() : null;
-        if (name) env[name] = dataStore[dataPtr++] ?? null;
+        const val = dataStore[dataPtr++] ?? null;
+        if (arg.type === 'variable') {
+          writeVar(env, arg.name, val);
+        } else if ((arg.type === 'callable' || arg.type === 'subscript') && arg.name) {
+          // Array subscript: READ C$(M,C)
+          const arr = env[arg.name] ?? globalVars[arg.name];
+          if (Array.isArray(arr) && arg.args?.length > 0) {
+            const idxs = await Promise.all(arg.args.map(x => x ? evalExpr(x, env) : 0));
+            let a = arr;
+            for (let d = 0; d < idxs.length - 1; d++) a = a[idxs[d]] || (a[idxs[d]] = []);
+            a[idxs[idxs.length - 1]] = val;
+          }
+        }
       }
       return;
     }
     case 'RESTORE': dataPtr = 0; return;
 
     // ── menu ─────────────────────────────────────────────────
-    case 'MENU': {
-      // MENU menuId, itemId, enabled, title
-      // MENU menuId, itemId, enabled  (enable/disable only)
-      const menuId  = Number(await a(0)) || 0;
-      const itemId  = Number(await a(1)) || 0;
-      const enabled = Number(await a(2));
-      const title   = args[3] ? String(await a(3)) : null;
-      if (menuId === 0) return;
-      if (title !== null) {
-        setMenu(menuId, itemId, !!enabled, title);
-      } else {
-        // enable/disable existing item
-        if (menuDefs[menuId] && itemId > 0 && menuDefs[menuId].items[itemId]) {
-          menuDefs[menuId].items[itemId].enabled = !!enabled;
-          renderMenuBar();
-        }
-      }
-      return;
+    case 'APPLE': {
+      // APPLE MENU "item" — add item to Apple menu (ID 255)
+      const title = await s(0);
+      if (!menuDefs[255]) menuDefs[255] = {title: '🍎', enabled: true, items: {}};
+      const idx = Math.max(0, ...Object.keys(menuDefs[255].items).map(Number)) + 1;
+      menuDefs[255].items[idx] = {title, enabled: true};
+      renderMenuBar(); return;
     }
 
     // ── dialog / input ────────────────────────────────────────
     case 'DIALOG': {
+      if (stmt.keyword === 'ON') {
+        // Reset D0 so WHILE D0<>1 loops wait for fresh events (Mac BASIC idiom)
+        globalVars['d0'] = 0;
+        dialogOn = true;
+        // Yield to browser and dispatch any pending events, like EVENT ON
+        await new Promise(r => setTimeout(r, 0));
+        await fireEventHandlers();
+        return;
+      }
+      if (stmt.keyword === 'OFF') { dialogOn = false; return; }
       const nn = await n(0);
       if (nn === 0) {
-        // blocking wait for event — handled via evalCallable for the fn form
-        // as a stmt, just yield
-        await waitForEvent(0);
+        const evt = await waitForEvent(0);
+        if (debugMode) console.log(`▶ DIALOG 0 got event: ${evt?.type ?? 'null'}`);
+        if (evt && evt.type === 'menu' && onMenuHandler) {
+          lastMenu = evt.menu; lastItem = evt.item;
+          await callEventHandler(onMenuHandler);
+        } else if (evt && evt.type === 'mouse' && onMouseHandler) {
+          await callEventHandler(onMouseHandler);
+        } else if (evt && evt.type === 'timer' && onTimerHandler) {
+          await callEventHandler(onTimerHandler);
+        } else if (evt && evt.type === 'stop' && onStopHandler) {
+          await callEventHandler(onStopHandler);
+        } else if (evt && evt.type !== 'stop' && onDialogHandler) {
+          await callEventHandler(onDialogHandler);
+        }
       } else if (args.length >= 2) {
         const msg = await s(1);
         await alertUser('', msg);
@@ -832,7 +1540,7 @@ async function execSysCall(stmt, env) {
       const txt = await promptUser('Input', prompt) || '';
       const target = args[varIdx];
       if (target && target.type === 'variable') {
-        const v = parseFloat(txt); env[target.name.toLowerCase()] = isNaN(v) ? txt : v;
+        const v = parseFloat(txt); env[target.name] = isNaN(v) ? txt : v;
       }
       return;
     }
@@ -851,16 +1559,309 @@ async function execSysCall(stmt, env) {
 
     case 'SWAP': {
       if (args.length >= 2 && args[0].type === 'variable' && args[1].type === 'variable') {
-        const a_ = args[0].name.toLowerCase(), b_ = args[1].name.toLowerCase();
+        const a_ = args[0].name, b_ = args[1].name;
         const tmp = env[a_]; env[a_] = env[b_]; env[b_] = tmp;
       }
       return;
     }
-    case 'INC': { const nm = args[0]?.type === 'variable' ? args[0].name.toLowerCase() : null; if (nm) env[nm] = (env[nm]||0)+1; return; }
-    case 'DEC': { const nm = args[0]?.type === 'variable' ? args[0].name.toLowerCase() : null; if (nm) env[nm] = (env[nm]||0)-1; return; }
+    case 'INC': { const nm = args[0]?.type === 'variable' ? args[0].name : null; if (nm) env[nm] = (env[nm]||0)+1; return; }
+    case 'DEC': { const nm = args[0]?.type === 'variable' ? args[0].name : null; if (nm) env[nm] = (env[nm]||0)-1; return; }
 
-    // silently skip everything else
-    default: return;
+    case 'BREAK':
+      // On Mac, BREAK ON/OFF enabled/disabled Command+Period interrupting the program. Not implemented.
+      return;
+
+    case 'MOUSE':
+      if (stmt.keyword === 'ON')  { mouseOn = true;  return; }
+      if (stmt.keyword === 'OFF') { mouseOn = false; return; }
+      console.log(`unsupported: MOUSE ${stmt.keyword ?? ''}`); return;
+
+    case 'TIMER': {
+      if (stmt.keyword === 'ON') {
+        timerOn = true;
+        return;
+      }
+      if (stmt.keyword === 'OFF') {
+        timerOn = false;
+        return;
+      }
+      // TIMER n — set interval in ticks (1 tick ≈ 1/60 s)
+      timerInterval = Math.round((await n(0)) * 1000 / 60);
+      return;
+    }
+
+    case 'EVENT':
+      // EVENT ON/OFF — global event enable. EVENT ON yields to the browser and
+      // dispatches any pending events to their registered handlers.
+      if (stmt.keyword === 'ON') {
+        dialogOn = true;
+        await new Promise(r => setTimeout(r, 0));
+        await fireEventHandlers();
+        return;
+      }
+      if (stmt.keyword === 'OFF') { dialogOn = false; return; }
+      console.log(`unsupported: EVENT ${stmt.keyword ?? ''}`); return;
+
+    case 'MENU':
+      if (stmt.keyword === 'ON')  { renderMenuBar(); return; }
+      if (stmt.keyword === 'OFF') { return; }
+      // fall through to MENU menuId, itemId, state [, title] handling below
+      {
+        const a0 = args[0];
+        let menuId, itemId, enabled, title;
+        if (a0 && a0.x !== undefined) {
+          // (menuId, state) parsed as exprPoint — 2-arg form: enable/disable whole menu
+          menuId = Math.floor(Number(await evalExpr(a0.x, env))) || 0;
+          const st = Math.floor(Number(await evalExpr(a0.y, env)));
+          if (menuId > 0 && menuDefs[menuId]) {
+            menuDefs[menuId].enabled = st !== 0;
+            renderMenuBar();
+          }
+          return;
+        }
+        menuId  = Number(await a(0)) || 0;
+        itemId  = Number(await a(1)) || 0;
+        enabled = Number(await a(2));
+        title   = args[3] ? String(await a(3)) : null;
+        if (menuId === 0) return;
+        if (title !== null) {
+          setMenu(menuId, itemId, !!enabled, title);
+        } else {
+          if (menuDefs[menuId]) {
+            if (itemId === 0) { menuDefs[menuId].enabled = enabled !== 0; menuDefs[menuId].checked = enabled === 2; }
+            else if (menuDefs[menuId].items[itemId]) { menuDefs[menuId].items[itemId].enabled = enabled !== 0; menuDefs[menuId].items[itemId].checked = enabled === 2; }
+            renderMenuBar();
+          }
+        }
+        return;
+      }
+
+    case 'FLUSHEVENTS': {
+      eventQueue.length = 0;
+      return;
+    }
+
+    case 'BUTTON': {
+      const id = Math.floor(await n(0));
+
+      if (stmt.keyword === 'CLOSE') { destroyCtrl(id); return; }
+
+      if (args.length >= 3 && args[2] !== null) {
+        // BUTTON id, condition, title$, rect, type  OR
+        // BUTTON id, condition, (rect), title$, type  (when literal rect in pos 2)
+        let title, rectArg;
+        if (args[2]?.from) { rectArg = args[2]; title = args[3] ? String(await evalExpr(args[3], env)) : ''; }
+        else { title = String(await evalExpr(args[2], env) ?? ''); rectArg = args[3]; }
+        const active = Math.floor(await n(1));
+        const type = args[4] ? Math.floor(await n(4)) : 1;  // 1=push, 2=checkbox, 3=radio
+        const rect = await resolveCtrlRect(rectArg, env);
+
+        if (!rect) {
+          // No rect — update existing button state and text (BUTTON id, state, title$)
+          const ctrl = controlStore[id];
+          if (ctrl) {
+            ctrl.value = active;
+            ctrl.title = title;
+            if (ctrl.el) {
+              ctrl.el.disabled = (active === 0);
+              ctrl.el.textContent = title;
+              if (active === 2) ctrl.el.classList.add('selected');
+              else ctrl.el.classList.remove('selected');
+            }
+          }
+          return;
+        }
+
+        destroyCtrl(id);
+        const wdef = ctrlWdef();
+        if (!wdef) return;
+
+        const el = document.createElement('button');
+        el.className = 'mac-ctrl mac-btn';
+        el.textContent = title;
+        el.disabled = (active === 0);
+        if (active === 2) el.classList.add('selected');
+        el.addEventListener('mousedown', e => e.stopPropagation());
+        el.addEventListener('click', () => {
+          const r = el.getBoundingClientRect();
+          const [mx, my] = canvasCoords(r.left + r.width/2, r.top + r.height/2);
+          mouseX = mx; mouseY = my; mouseDown = true;
+          lastDialogId = id;
+          pushEvent('button', {id, code: 1});
+          setTimeout(() => { mouseDown = false; }, 100);
+        });
+        wdef.container.appendChild(el);
+        placeCtrl(el, rect[0], rect[1], rect[2], rect[3]);
+        controlStore[id] = {el, type: 'button', value: active, title};
+        return;
+      }
+
+      // BUTTON id [, state] — state change (0=disable, 1=normal, 2=selected/invert)
+      const state = args[1] ? Math.floor(await n(1)) : 1;
+      const ctrl = controlStore[id];
+      if (ctrl) {
+        ctrl.value = state;
+        if (ctrl.el) {
+          ctrl.el.disabled = (state === 0);
+          if (state === 2) ctrl.el.classList.add('selected');
+          else ctrl.el.classList.remove('selected');
+        }
+      }
+      return;
+    }
+
+    case 'GLOBALS': {
+      // GLOBALS GOSUB label / GLOBALS GOTO label — call subroutine in global context
+      if (stmt.keyword === 'GOSUB' && args[0]) throw new GosubSignal(labelOf(args[0]));
+      if (stmt.keyword === 'GOTO'  && args[0]) throw new GotoSignal(labelOf(args[0]));
+      return;
+    }
+
+    case 'WIDTH': {
+      penWidth = Math.max(1, await n(0));
+      if (ctx) ctx.lineWidth = penWidth;
+      return;
+    }
+
+    case 'WAIT': {
+      const ticks = await n(0);
+      if (ticks > 0) await new Promise(r => setTimeout(r, ticks * 1000 / 60));
+      return;
+    }
+
+    case 'TRACE':   { debugMode = true;  return; }
+    case 'NOTRACE': { debugMode = false; return; }
+
+    case 'PT': {
+      showCanvas();
+      const a0 = args[0];
+      let px, py;
+      if (a0?.x !== undefined) { px = await evalExpr(a0.x, env); py = await evalExpr(a0.y, env); }
+      else                      { px = await n(0); py = await n(1); }
+      ctx.fillStyle = currentFg;
+      ctx.fillRect(Math.floor(px), Math.floor(py), 1, 1);
+      return;
+    }
+
+    case 'SEGMENT': {
+      if (stmt.keyword === 'RETURN') throw new ReturnSignal();
+      // SEGMENT (cx,cy), radius, startAngle, endAngle [FILL]
+      showCanvas();
+      const a0 = args[0];
+      let cx, cy, r, ang1, ang2;
+      if (a0?.x !== undefined) {
+        cx = await evalExpr(a0.x, env); cy = await evalExpr(a0.y, env);
+        r = await n(1); ang1 = await n(2); ang2 = await n(3);
+      } else {
+        cx = await n(0); cy = await n(1); r = await n(2); ang1 = await n(3); ang2 = await n(4);
+      }
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.arc(cx, cy, Math.abs(r), ang1 * Math.PI / 180, ang2 * Math.PI / 180);
+      ctx.closePath();
+      if (stmt.keyword === 'FILL') { ctx.fillStyle = currentFg; ctx.fill(); }
+      else { ctx.strokeStyle = currentFg; ctx.lineWidth = penWidth; ctx.stroke(); }
+      return;
+    }
+
+    case 'VTAB': { textY = Math.max(1, await n(0)) * (textSize + 2); return; }
+    case 'HTAB': { textX = Math.max(0, (await n(0) - 1)) * Math.round(textSize * 0.6); return; }
+
+    case 'INVERSE': { const tmp = currentFg; currentFg = currentBg; currentBg = tmp; return; }
+    case 'NORMAL':  { currentFg = '#000000'; currentBg = '#ffffff'; return; }
+
+    case 'KILL': {
+      // KILL PICTURE handle — discard a picture buffer
+      // KILL "filename" — delete file (no-op in browser)
+      if (stmt.keyword === 'PICTURE' && args[0]) {
+        const handle = String(await evalExpr(args[0], env));
+        delete spriteBuffer[handle];
+      }
+      return;
+    }
+
+    // No-op stubs — not implementable in a browser context
+    case 'COORDINATE': case 'PICTURE':
+    case 'RESOURCES': case 'COMPILE': case 'DEFSTR':
+    case 'LIBRARY': case 'TOOLBOX': case 'INLINE': case 'CHAIN':
+    case 'BLOCKMOVE': case 'TALK':
+    case 'MINWINDOW': case 'MAXWINDOW': case 'SETZOOM':
+    case 'SPEED': case 'LPRINT': case 'LLIST':
+    case 'HPLOT': case 'HCOLOR': case 'HGRAPH': case 'SCRN':
+    case 'FLASH': case 'POKE': case 'RESUME': case 'APPLE':
+    case 'ROUTE': case 'RATIO': case 'SETSELECT': case 'PUSH': case 'LOCAL':
+      console.log(`unimplemented: ${cmd}${stmt.keyword ? ' ' + stmt.keyword : ''}`);
+      return;
+
+    case 'EDIT': {
+      if (stmt.keyword !== 'FIELD') return;
+
+      // EDIT FIELD CLOSE id (via trailer)
+      const closeTrailer = stmt.trailer?.find(t => t.keyword === 'CLOSE');
+      if (closeTrailer) {
+        const cid = Math.floor(Number(await evalExpr(closeTrailer.args[0], env)));
+        destroyCtrl(cid);
+        if (currentEditField === cid) currentEditField = null;
+        return;
+      }
+
+      // Field ID: channel (#id) or expression
+      const a0 = args[0];
+      if (!a0) return;
+      const fieldId = a0.type === 'channel'
+        ? Math.floor(Number(await evalExpr(a0.n, env)))
+        : Math.floor(await n(0));
+
+      if (args.length <= 1 || args[1] === null) {
+        // Focus: EDIT FIELD id
+        currentEditField = fieldId;
+        controlStore[fieldId]?.el?.focus();
+        return;
+      }
+
+      // Create/update: EDIT FIELD id, text$, rect, type, justify
+      const text = args[1] ? String(await evalExpr(args[1], env) ?? '') : '';
+      const rect = args[2] ? await resolveCtrlRect(args[2], env) : null;
+
+      if (rect) destroyCtrl(fieldId);
+
+      const wdef = ctrlWdef();
+      if (!wdef) return;
+
+      let ctrl = controlStore[fieldId];
+      if (!ctrl?.el) {
+        const el = document.createElement('input');
+        el.type = 'text';
+        el.className = 'mac-ctrl mac-editfield';
+        el.value = text;
+        el.addEventListener('focus', () => {
+          currentEditField = fieldId;
+          lastDialogId = fieldId;
+          pushEvent('editfield', {id: fieldId, code: 2});
+        });
+        el.addEventListener('keydown', e => {
+          if (e.key === 'Enter') { e.preventDefault(); pushEvent('editfield', {id: fieldId, code: 6}); }
+          else if (e.key === 'Tab') { e.preventDefault(); pushEvent('editfield', {id: fieldId, code: 7}); }
+        });
+        wdef.container.appendChild(el);
+        ctrl = controlStore[fieldId] = {el, type: 'editfield', value: text};
+        currentEditField = fieldId;
+      } else {
+        ctrl.el.value = text;
+        ctrl.value = text;
+      }
+      if (rect) placeCtrl(ctrl.el, rect[0], rect[1], rect[2], rect[3]);
+      return;
+    }
+
+    case 'CURSOR': {
+      const cursorMap = {0: 'default', 1: 'text', 2: 'crosshair', 4: 'wait', 5: 'wait'};
+      const val = args.length > 0 ? await n(0) : 0;
+      document.body.style.cursor = cursorMap[val] ?? 'default';
+      return;
+    }
+
+    default: console.log(`unsupported syscall: ${cmd}`); return;
   }
 }
 
@@ -872,7 +1873,7 @@ async function execIf(stmt, env) {
 }
 
 async function execFor(stmt, env) {
-  const varName = stmt.variable.toLowerCase();
+  const varName = stmt.variable;
   let val = await evalExpr(stmt.start, env);
   const end  = await evalExpr(stmt.end, env);
   const step = stmt.step ? await evalExpr(stmt.step, env) : 1;
@@ -924,27 +1925,552 @@ async function execSelect(stmt, env) {
 async function execOn(stmt, env) {
   const val = Math.floor(Number(await evalExpr(stmt.expr, env))) - 1;
   if (val < 0 || val >= stmt.targets.length) return;
-  const lbl = String(await evalExpr(stmt.targets[val], env)).toLowerCase();
+  const tgt = stmt.targets[val];
+  // Targets are label names stored as variable/expression nodes — extract the name
+  const lbl = (tgt && typeof tgt === 'object'
+    ? (tgt.name ?? tgt.value ?? tgt.label ?? String(await evalExpr(tgt, env)))
+    : String(tgt ?? '')).toLowerCase();
   if (stmt.cmd === 'GOTO') throw new GotoSignal(lbl);
   if (stmt.cmd === 'GOSUB') throw new GosubSignal(lbl);
 }
 
+function parseMenuItems(str) {
+  const items = [];
+  for (const raw of str.split(';')) {
+    let text = raw.trim();
+    if (!text) continue;
+    if (text === '-' || text === '(-' || text.startsWith('---')) { items.push({title: '-', enabled: false}); continue; }
+    let enabled = true;
+    if (text.startsWith('(')) { enabled = false; text = text.slice(1); }
+    text = text.replace(/\/.$/, '');  // strip /K keyboard shortcut
+    items.push({title: text.trim(), enabled, checked: false});
+  }
+  return items;
+}
+
 async function execProcCall(stmt, env) {
-  const fn = funcDefs[stmt.name.toLowerCase()];
-  if (!fn) { consoleLog(`undefined: ${stmt.name}`); return; }
+  const name = stmt.name;
+  const ev = i => evalExpr(stmt.args?.[i], env);
+
+  // Built-in Mac Toolbox calls
+  switch (name) {
+    case 'clearmenubar':
+      Object.keys(menuDefs).forEach(k => delete menuDefs[k]);
+      renderMenuBar(); return;
+    case 'drawmenubar': return;  // we render immediately; no-op here
+    case 'setmenubar':
+      if (savedMenuBar) {
+        Object.keys(menuDefs).forEach(k => delete menuDefs[k]);
+        Object.assign(menuDefs, JSON.parse(JSON.stringify(savedMenuBar)));
+        renderMenuBar();
+      }
+      return;
+    case 'appendmenu': {
+      const handle = Math.floor(Number(await ev(0))) || 0;
+      const itemStr = String((await ev(1)) ?? '');
+      if (!menuDefs[handle]) menuDefs[handle] = {title: '', enabled: true, items: {}};
+      const startIdx = Math.max(0, ...Object.keys(menuDefs[handle].items).map(Number)) + 1;
+      parseMenuItems(itemStr).forEach((it, i) => { menuDefs[handle].items[startIdx + i] = it; });
+      renderMenuBar(); return;
+    }
+    case 'insertmenu': { renderMenuBar(); return; }
+    case 'enableitem': {
+      const handle = Math.floor(Number(await ev(0))) || 0;
+      const item   = Math.floor(Number(await ev(1))) || 0;
+      if (menuDefs[handle]) {
+        if (item === 0) menuDefs[handle].enabled = true;
+        else if (menuDefs[handle].items[item]) menuDefs[handle].items[item].enabled = true;
+        renderMenuBar();
+      }
+      return;
+    }
+    case 'disableitem': {
+      const handle = Math.floor(Number(await ev(0))) || 0;
+      const item   = Math.floor(Number(await ev(1))) || 0;
+      if (menuDefs[handle]) {
+        if (item === 0) menuDefs[handle].enabled = false;
+        else if (menuDefs[handle].items[item]) menuDefs[handle].items[item].enabled = false;
+        renderMenuBar();
+      }
+      return;
+    }
+    case 'checkitem': {
+      const handle  = Math.floor(Number(await ev(0))) || 0;
+      const item    = Math.floor(Number(await ev(1))) || 0;
+      const checked = !!(await ev(2));
+      if (menuDefs[handle]?.items[item]) {
+        menuDefs[handle].items[item].checked = checked;
+        renderMenuBar();
+      }
+      return;
+    }
+    case 'getitem': {
+      // CALL GETITEM(hMenu, item, str$) — get menu item title into a string variable
+      const handle = Math.floor(Number(await ev(0))) || 0;
+      const item   = Math.floor(Number(await ev(1))) || 0;
+      const strArg = stmt.args?.[2];
+      if (strArg?.type === 'variable' && menuDefs[handle]?.items[item]) {
+        writeVar(env, strArg.name, menuDefs[handle].items[item].title ?? '');
+      }
+      return;
+    }
+    case 'deletemenu': case 'disposemenu': {
+      const handle = Math.floor(Number(await ev(0))) || 0;
+      if (menuDefs[handle]) { delete menuDefs[handle]; renderMenuBar(); }
+      return;
+    }
+    // ── Cursor ───────────────────────────────────────────────────
+    case 'initcursor': {
+      const w = canvas || document.getElementById('canvas-wrapper');
+      if (w) w.style.cursor = 'default';
+      return;
+    }
+    case 'setcursor': {
+      const cursors = ['default','text','crosshair','cell','wait','pointer'];
+      const idx = Math.floor(Number(await ev(0))) || 0;
+      const cur = cursors[idx] ?? 'default';
+      const w = canvas || document.getElementById('canvas-wrapper');
+      if (w) w.style.cursor = cur;
+      return;
+    }
+    case 'showcursor': {
+      const w = canvas || document.getElementById('canvas-wrapper');
+      if (w) w.style.cursor = 'default';
+      return;
+    }
+    case 'hidecursor': {
+      const w = canvas || document.getElementById('canvas-wrapper');
+      if (w) w.style.cursor = 'none';
+      return;
+    }
+    case 'getmouse': {
+      // CALL GETMOUSE(pt) — writes current mouse position as packed Mac Point (v<<16|h)
+      const arg0 = stmt.args?.[0];
+      if (arg0) {
+        const assignName = arg0.type === 'callable' ? arg0.name : (arg0.type === 'variable' ? arg0.name : null);
+        if (assignName) {
+          const arr = env[assignName] ?? globalVars[assignName];
+          if (Array.isArray(arr)) { arr[0] = mouseX; arr[1] = mouseY; }
+          else { writeVar(env, assignName, ((mouseY & 0xFFFF) << 16) | (mouseX & 0xFFFF)); }
+        }
+      }
+      return;
+    }
+
+    // ── Regions ──────────────────────────────────────────────────
+    case 'setclip': {
+      const h = Math.floor(Number(await ev(0))) || 0;
+      applyClip(h);
+      return;
+    }
+    case 'cliprect': {
+      // CALL CLIPRECT(rect(i)) or CLIPRECT(rect(i,j))
+      const arg0 = stmt.args?.[0];
+      if (arg0?.type === 'callable') {
+        const arrName = arg0.name;
+        const i0 = arg0.args?.[0] ? Math.floor(Number(await evalExpr(arg0.args[0], env))) : 0;
+        const i1 = arg0.args?.[1] ? Math.floor(Number(await evalExpr(arg0.args[1], env))) : null;
+        const arr = env[arrName] ?? globalVars[arrName];
+        if (Array.isArray(arr)) {
+          let target = arr, base = i0;
+          if (i1 !== null && Array.isArray(arr[i0])) { target = arr[i0]; base = i1; }
+          const h = newRegion();
+          setRegionRect(h, target[base], target[base+1], target[base+2], target[base+3]);
+          applyClip(h);
+          return;
+        }
+      }
+      return;
+    }
+    case 'disposergn': {
+      const h = Math.floor(Number(await ev(0))) || 0;
+      delete regionStore[h];
+      return;
+    }
+    case 'openrgn': case 'closergn': case 'getclip':
+    case 'invalrect': case 'validrect': case 'beginupdate': case 'endupdate':
+      return;
+    case 'hilitemenu': {
+      const mid = Math.floor(Number(await ev(0))) || 0;
+      document.querySelectorAll('#dynamic-menubar .dyn-menu.open')
+        .forEach(el => el.classList.remove('open'));
+      if (mid !== 0) {
+        const el = document.querySelector(`#dynamic-menubar .dyn-menu[data-menu-id="${mid}"]`);
+        if (el) el.classList.add('open');
+      }
+      return;
+    }
+    case 'flashmenubar': {
+      const mid = Math.floor(Number(await ev(0))) || 0;
+      const sel = mid
+        ? `#dynamic-menubar .dyn-menu[data-menu-id="${mid}"]`
+        : '#dynamic-menubar';
+      const el = document.querySelector(sel);
+      if (el) {
+        el.style.filter = 'invert(1)';
+        setTimeout(() => { el.style.filter = ''; }, 80);
+      }
+      return;
+    }
+
+    // ── setrect / rect math — write back to array via AST arg ───
+    case 'setrect': case 'offsetrect': case 'insetrect': {
+      const arg0 = stmt.args?.[0];
+      if (arg0?.type === 'callable') {
+        const arrName = arg0.name;
+        const i0 = arg0.args?.[0] ? Math.floor(Number(await evalExpr(arg0.args[0], env))) : 0;
+        const i1 = arg0.args?.[1] ? Math.floor(Number(await evalExpr(arg0.args[1], env))) : null;
+        const arr = env[arrName] ?? globalVars[arrName];
+        if (Array.isArray(arr)) {
+          let target = arr, base = i0;
+          if (i1 !== null && Array.isArray(arr[i0])) { target = arr[i0]; base = i1; }
+          if (name === 'setrect') {
+            target[base]   = Number(await ev(1)) || 0;
+            target[base+1] = Number(await ev(2)) || 0;
+            target[base+2] = Number(await ev(3)) || 0;
+            target[base+3] = Number(await ev(4)) || 0;
+          } else if (name === 'offsetrect') {
+            const dh = Number(await ev(1)) || 0, dv = Number(await ev(2)) || 0;
+            target[base]   += dh; target[base+1] += dv;
+            target[base+2] += dh; target[base+3] += dv;
+          } else if (name === 'insetrect') {
+            const dh = Number(await ev(1)) || 0, dv = Number(await ev(2)) || 0;
+            target[base]   += dh; target[base+1] += dv;
+            target[base+2] -= dh; target[base+3] -= dv;
+          }
+        }
+      }
+      return;
+    }
+
+    case 'unionrect': {
+      // CALL UNIONRECT(src1(i), src2(i), dst(i))
+      const readRect = async argN => {
+        const a = stmt.args?.[argN];
+        if (a?.type !== 'callable') return null;
+        const arr = env[a.name] ?? globalVars[a.name];
+        if (!Array.isArray(arr)) return null;
+        const i = a.args?.[0] ? Math.floor(Number(await evalExpr(a.args[0], env))) : 0;
+        return { arr, i };
+      };
+      const s1 = await readRect(0), s2 = await readRect(1), dst = await readRect(2);
+      if (s1 && s2 && dst) {
+        dst.arr[dst.i]   = Math.min(s1.arr[s1.i],   s2.arr[s2.i]);
+        dst.arr[dst.i+1] = Math.min(s1.arr[s1.i+1], s2.arr[s2.i+1]);
+        dst.arr[dst.i+2] = Math.max(s1.arr[s1.i+2], s2.arr[s2.i+2]);
+        dst.arr[dst.i+3] = Math.max(s1.arr[s1.i+3], s2.arr[s2.i+3]);
+      }
+      return;
+    }
+
+    case 'rectrgn': {
+      // CALL RECTRGN(rgnHandle, rect(i))
+      const h = Math.floor(Number(await ev(0))) || 0;
+      const arg1 = stmt.args?.[1];
+      if (arg1?.type === 'callable') {
+        const arrName = arg1.name;
+        const startIdx = arg1.args?.[0] ? Math.floor(Number(await evalExpr(arg1.args[0], env))) : 0;
+        const arr = env[arrName] ?? globalVars[arrName];
+        if (Array.isArray(arr))
+          setRegionRect(h, arr[startIdx], arr[startIdx+1], arr[startIdx+2], arr[startIdx+3]);
+      }
+      return;
+    }
+
+    // ── TextEdit ──────────────────────────────────────────────────
+    case 'tenew': {
+      // CALL TENEW(outVar, viewRect) — write handle into outVar
+      const arg0 = stmt.args?.[0];
+      let varName = null;
+      if (arg0?.type === 'variable') varName = arg0.name;
+      else if (arg0?.type === 'callable' && !arg0.args?.length) varName = arg0.name;
+      const handle = await makeTeHandle(stmt.args?.[1], env);
+      if (varName) writeVar(env, varName, handle);
+      return;
+    }
+    case 'tesettext': {
+      // CALL TESETTEXT(textPtr, len, hTE) — Mac API order
+      const textPtr = Math.floor(Number(await evalExpr(stmt.args?.[0], env))) || 0;
+      const len     = Math.floor(Number(await evalExpr(stmt.args?.[1], env))) || 0;
+      const handle  = Math.floor(Number(await evalExpr(stmt.args?.[2], env))) || 0;
+      const rec = teHandleMap[handle];
+      const _rh = env['rhand&'] ?? globalVars['rhand&'];
+      console.log(`TE TESETTEXT: ptr=0x${textPtr.toString(16)} len=${len} handle=${handle} rec=${!!rec} rhand&=${_rh} fakeRead(${_rh})=${fakeReadU32(_rh)}`);
+      if (rec) { rec.text = macRomanToStr(fakeReadBytes(textPtr, len)); console.log(`  text="${rec.text.slice(0,60)}"`); renderTeDiv(rec); }
+      else console.warn(`  no TE record for handle ${handle}`);
+      return;
+    }
+    case 'tecaltext': {
+      const handle = Math.floor(Number(await evalExpr(stmt.args?.[0], env))) || 0;
+      const rec = teHandleMap[handle];
+      if (rec) {
+        const lines = rec.text.split('\r').length;
+        fakeWriteU16(fakeReadU32(handle) + 94, lines);
+        console.log(`TE TECALTEXT: handle=${handle} lines=${lines}`);
+      } else console.warn(`TE TECALTEXT: no record for handle ${handle}`);
+      return;
+    }
+    case 'teupdate': {
+      const handle = Math.floor(Number(await evalExpr(stmt.args?.[1], env))) || 0;
+      const rec = teHandleMap[handle];
+      console.log(`TE TEUPDATE: handle=${handle} rec=${!!rec} text="${rec?.text?.slice(0,40)}"`);
+      if (rec) renderTeDiv(rec);
+      return;
+    }
+    case 'tescroll': {
+      const dH     = Number(await evalExpr(stmt.args?.[0], env)) || 0;
+      const dV     = Number(await evalExpr(stmt.args?.[1], env)) || 0;
+      const handle = Math.floor(Number(await evalExpr(stmt.args?.[2], env))) || 0;
+      const rec = teHandleMap[handle];
+      console.log(`TE TESCROLL: dH=${dH} dV=${dV} handle=${handle}`);
+      if (rec) { rec.div.scrollLeft += dH; rec.div.scrollTop += dV; }
+      return;
+    }
+    case 'tedispose': {
+      const handle = Math.floor(Number(await evalExpr(stmt.args?.[0], env))) || 0;
+      const rec = teHandleMap[handle];
+      if (rec) { rec.div.remove(); delete teHandleMap[handle]; }
+      return;
+    }
+    case 'teactivate': case 'teleactivate': case 'drawcontrols':
+      return;
+
+    case 'setitem': {
+      // CALL SETITEM(hMenu, item, str$) — set menu item title
+      const handle = Math.floor(Number(await ev(0))) || 0;
+      const item   = Math.floor(Number(await ev(1))) || 0;
+      const title  = String((await ev(2)) ?? '');
+      if (menuDefs[handle]?.items[item]) {
+        menuDefs[handle].items[item].title = title;
+        renderMenuBar();
+      }
+      return;
+    }
+
+    // Mac Toolbox stubs — not fully implemented
+    case 'textbox': case 'setpenstate': case 'getpenstate':
+    case 'invertrect': case 'framerect': case 'paintrect': case 'eraserect':
+    case 'fillrect': case 'frameoval': case 'paintoval': case 'eraseoval':
+    case 'invertroundrgn': case 'invertrgn': case 'paintrgn': case 'framergn':
+    case 'frameroundrect': case 'paintroundrect': case 'eraserundrect':
+    case 'drawchar': case 'drawstring': case 'drawtext':
+      return;
+    case 'moveto': case 'move': {
+      penX = Number(await ev(0)) || 0;
+      penY = Number(await ev(1)) || 0;
+      if (gfxPenMode === 10 && xorSnapshot) {
+        // Restore clean-canvas snapshot to erase any previous rubber-band line
+        ctx.putImageData(xorSnapshot, 0, 0);
+      }
+      return;
+    }
+    case 'lineto': case 'line': {
+      const tx = Number(await ev(0)) || 0, ty = Number(await ev(1)) || 0;
+      ctx.strokeStyle = currentFg; ctx.lineWidth = penWidth;
+      ctx.beginPath(); ctx.moveTo(penX, penY); ctx.lineTo(tx, ty); ctx.stroke();
+      penX = tx; penY = ty;
+      return;
+    }
+    case 'penmode': {
+      const mode = Math.round(Number(await ev(0)) || 0);
+      if (mode === 10 && gfxPenMode !== 10) {
+        gfxPenMode = 10;
+        if (!xorSnapshot) xorSnapshot = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      } else if (mode !== 10 && gfxPenMode === 10) {
+        gfxPenMode = mode;
+        if (xorSnapshot) { ctx.putImageData(xorSnapshot, 0, 0); xorSnapshot = null; }
+      } else {
+        gfxPenMode = mode;
+      }
+      return;
+    }
+    case 'pensize': {
+      const pw = Number(await ev(0)) || 1, ph = Number(await ev(1)) || pw;
+      penWidth = Math.max(1, pw); penHeight = Math.max(1, ph);
+      ctx.lineWidth = penWidth;
+      return;
+    }
+    case 'textfont': case 'textface': case 'textmode': case 'textsize':
+    case 'setport': case 'getport': case 'initport': case 'getwtitle':
+    case 'sysclosedeskfiles': case 'nop':
+    case 'getwmgrport': case 'getport': case 'setctype':
+    case 'paramtext': case 'selitext': case 'setitext': case 'getitext':
+    case 'getctitle': {
+      // CALL GETCTITLE(handle&, title$) — read control title into variable
+      const handle = Math.floor(Number(await ev(0)));
+      const titleArg = stmt.args?.[1];
+      if (titleArg?.type === 'variable' || titleArg?.type === 'callable') {
+        const varName = titleArg.name;
+        const ctrl = controlStore[handle];
+        writeVar(env, varName, ctrl?.title ?? '');
+      }
+      return;
+    }
+    case 'getditem': case 'setditem': case 'setctitle':
+    case 'getresinfo': case 'releaseresource': case 'useresfile':
+    case 'pennormal': case 'penpat': case 'openrgn': case 'closergn':
+    case 'setrectrgn': case 'sectrgn': case 'diffrgn': case 'unionrgn':
+    case 'modaldialog': case 'begindialog': case 'enddialog':
+    case 'teautoview': case 'tesettext': return;  // override if previously defined
+    case 'drawmenubar': return;
+    case 'getkeys': {
+      // CALL GETKEYS(arr) — fill key state array with zeros (no key pressed)
+      const arg0 = stmt.args?.[0];
+      if (arg0?.type === 'callable' || arg0?.type === 'variable') {
+        const n = arg0.type === 'callable' ? arg0.name : arg0.name;
+        const arr = env[n] ?? globalVars[n];
+        if (Array.isArray(arr)) arr.fill(0);
+        else writeVar(env, n, 0);
+      }
+      return;
+    }
+    case 'getfontinfo': {
+      // CALL GETFONTINFO(ascent) — fill font metric variables (DIM FAsc,FDes,FWid,FLead,Fht)
+      // Variables are laid out consecutively: FAsc, FDes, FWid, FLead, Fht
+      writeVar(env, 'fasc', textSize); writeVar(env, 'fdes', 2);
+      writeVar(env, 'fwid', Math.round(textSize * 0.6)); writeVar(env, 'flead', 1);
+      writeVar(env, 'fht', textSize + 3);
+      return;
+    }
+    case 'getpen': {
+      // CALL GETPEN(arr) — fill arr[0]=v(y), arr[1]=h(x) with current text pen position
+      const arg0 = stmt.args?.[0];
+      const arrName = arg0?.name ?? (arg0?.type === 'callable' ? arg0.name : null);
+      if (arrName) {
+        const baseIdx = arg0?.args?.[0] ? Math.floor(Number(await evalExpr(arg0.args[0], env))) : 0;
+        const arr = env[arrName] ?? globalVars[arrName];
+        if (Array.isArray(arr)) {
+          arr[baseIdx]     = Math.round(gfxPenY);
+          arr[baseIdx + 1] = Math.round(gfxPenX);
+        }
+      }
+      return;
+    }
+    case 'blockmove': return;  // memory copy stub
+    case 'offsetrect': {
+      // Standalone CALL OFFSETRECT(T, dh, dv) on scalar T — try DIM'd consecutive vars
+      // (can't implement properly without memory layout — just no-op)
+      return;
+    }
+  }
+
+  const fn = funcDefs[name];
+  if (!fn) { console.log(`undefined: ${name}`); return; }
+  if (debugMode) console.log(`▶ CALL ${name}`);
   const local = Object.create(env);
   if (fn.args) for (let i = 0; i < fn.args.length; i++)
-    local[fn.args[i].name.toLowerCase()] = await evalExpr(stmt.args?.[i], env);
+    local[fn.args[i].name] = await evalExpr(stmt.args?.[i], env);
   await execBlock(fn.body, local);
 }
 
+let savedMenuBar = null;
+
 async function execUserFuncCall(stmt, env) {
-  const name = stmt.name.toLowerCase();
-  const fn = funcDefs[name];
-  if (!fn) return null;
+  const fn = funcDefs[stmt.name];
+  if (!fn) {
+    // Built-in Toolbox FN calls
+    const ev = i => evalExpr(stmt.args?.[i], env);
+    switch (stmt.name) {
+      case 'newmenu': {
+        const menuId = Math.floor(Number(await ev(0))) || 0;
+        const title  = String((await ev(1)) ?? '');
+        menuDefs[menuId] = {title, enabled: true, items: {}};
+        renderMenuBar();
+        return menuId;
+      }
+      case 'getmenubar':
+        savedMenuBar = JSON.parse(JSON.stringify(menuDefs));
+        return 1;
+      case 'getmhandle': {
+        // Return the menu ID as its own "handle" (we use IDs directly)
+        const mid = Math.floor(Number(await ev(0))) || 0;
+        return mid;
+      }
+      case 'countmitems': {
+        const handle = Math.floor(Number(await ev(0))) || 0;
+        return menuDefs[handle] ? Object.keys(menuDefs[handle].items).length : 0;
+      }
+      case 'finderinfo': return 0;
+      case 'getresource': case 'get1resource': case 'count1resources':
+      case 'getindresource': case 'get1indresource':
+        return 0;
+      case 'getnamedresource': case 'get1namedresource': {
+        // FN GETNAMEDRESOURCE(type&, name$) -> handle or 0
+        const name = String((await ev(1)) ?? '').toLowerCase();
+        const text = rsrcTexts[name];
+        if (!text) return 0;
+        const bytes = new Uint8Array(text.length);
+        for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i) & 0xFF;
+        // data block: [2-byte length][text bytes]
+        const dataAddr = fakeMalloc(2 + bytes.length);
+        fakeWriteU16(dataAddr, bytes.length);
+        fakeWriteBytes(dataAddr + 2, bytes);
+        // handle = master pointer (4 bytes) -> dataAddr
+        const handle = fakeMalloc(4);
+        fakeWriteU32(handle, dataAddr);
+        console.log(`TE GETNAMEDRESOURCE: "${name}" len=${bytes.length} dataAddr=${dataAddr} handle=${handle}`);
+        return handle;
+      }
+      case 'openresfile': case 'openrfperm': case 'homeresfile': return 0;
+      case 'curresfile': case 'homeresfile': return 0;
+      case 'newrgn': return newRegion();
+      case 'bittst': return 0;       // FN BITTST(ptr,bit) — keyboard/memory bit test stub
+      case 'stringwidth': return 0;  // handled below in evalCallable default path
+      case 'sizeresource': return 0; // FN SIZERESOURCE(handle) — resource byte count stub
+      case 'gethandlesize': return 0;
+      case 'zeroscrap': return 0;
+      case 'putscrap': return 0;
+      case 'gestalt': return 0;
+      case 'aeinstalleventhandler': return 0;
+      case 'alert': case 'notealert': case 'caution': return 1;  // always OK
+      case 'getnewdialog': return 0;
+      case 'getcrefcon': return 0;
+      case 'getcref': return 0;
+      case 'pstr$': return '';  // Pascal string pointer to string
+      case 'tehandle': return 0;
+      case 'tenew': {
+        const h = await makeTeHandle(stmt.args?.[1], env);
+        console.log(`TE TENEW: handle=${h}`);
+        return h;
+      }
+      case 'ptinrect': {
+        // FN PTINRECT(pt, rect) — use current mouseX/mouseY against the rect
+        const ri = stmt.args?.[1];
+        let left = 0, top = 0, right = 512, bottom = 512;
+        if (ri?.type === 'callable') {
+          const arrName = ri.name;
+          const ri0 = ri.args?.[0] ? Math.floor(Number(await evalExpr(ri.args[0], env))) : 0;
+          const ri1 = ri.args?.[1] ? Math.floor(Number(await evalExpr(ri.args[1], env))) : null;
+          const arr = env[arrName] ?? globalVars[arrName];
+          if (Array.isArray(arr)) {
+            let row = arr, base = ri0;
+            if (ri1 !== null && Array.isArray(arr[ri0])) { row = arr[ri0]; base = ri1; }
+            left = Number(row[base] ?? 0); top = Number(row[base+1] ?? 0);
+            right = Number(row[base+2] ?? 0); bottom = Number(row[base+3] ?? 0);
+          }
+        }
+        return (mouseX >= left && mouseX < right && mouseY >= top && mouseY < bottom) ? -1 : 0;
+      }
+      case 'countresources': case 'count1resources': return 0;
+      case 'getctitle': return '';
+      case 'button': { const bid = Math.floor(Number(await A(0)??0)); return controlStore[bid]?.value ?? 0; }
+      case 'button&': { const bid = Math.floor(Number(await A(0)??0)); return controlStore[bid] ? bid : 0; }
+      case 'pGgetitemname$': case 'pGgetitemname': return '';
+    }
+    return null;
+  }
+  if (fn.using) {
+    // DEF FN foo USING bar& — dispatch through function pointer stored in bar&
+    const ptrName = fn.using.name;
+    const handle = Math.floor(Number(env[ptrName] ?? globalVars[ptrName] ?? 0));
+    const targetName = fnPtrTable[handle];
+    if (!targetName || !funcDefs[targetName]) return null;
+    return execUserFuncCall({...stmt, name: targetName}, env);
+  }
+  if (debugMode) console.log(`▶ FN ${stmt.name}`);
   const local = Object.create(env);
   if (fn.args) for (let i = 0; i < fn.args.length; i++)
-    local[fn.args[i].name.toLowerCase()] = await evalExpr(stmt.args?.[i], env);
+    local[fn.args[i].name] = await evalExpr(stmt.args?.[i], env);
   if (fn.type === 'defFn') return evalExpr(fn.value, local);
   await execBlock(fn.body, local);
   return fn.ret ? evalExpr(fn.ret, local) : null;
@@ -957,14 +2483,13 @@ async function evalExpr(node, env) {
     case 'constant':    return node.value;
     case 'literal':     return node.value;
     case 'variable': {
-      const name = node.name.toLowerCase();
-      if (name in env) return env[name];
-      if (name in globalVars) return globalVars[name];
+      if (node.name in env) return env[node.name];
+      if (node.name in globalVars) return globalVars[node.name];
       return 0;
     }
     case 'chainAccess': {
-      let v = env[node.name.toLowerCase()] ?? globalVars[node.name.toLowerCase()] ?? {};
-      for (const f of node.fields) v = (v && typeof v === 'object') ? v[f.toLowerCase()] : null;
+      let v = env[node.name] ?? globalVars[node.name] ?? {};
+      for (const f of node.fields) v = (v && typeof v === 'object') ? v[f] : null;
       return v ?? 0;
     }
     case 'binary':      return evalBinary(node, env);
@@ -1006,6 +2531,17 @@ async function evalBinary(node, env) {
 }
 
 async function evalUnary(node, env) {
+  if (node.operator === '@') {
+    // Address-of: @FN name → stable integer handle mapped to the function name.
+    // @varName (non-function) → 0 (real memory layout unsupported).
+    const expr = node.expression;
+    const fnName = expr?.name;
+    if (!fnName) return 0;
+    for (const [h, n] of Object.entries(fnPtrTable)) { if (n === fnName) return Number(h); }
+    const h = nextFnPtrHandle++;
+    fnPtrTable[h] = fnName;
+    return h;
+  }
   const v = await evalExpr(node.expression, env);
   switch(node.operator) {
     case '-': return -(Number(v)||0);
@@ -1030,7 +2566,7 @@ function compareOp(op, l, r) {
 
 // ── Built-in functions ────────────────────────────────────────
 async function evalCallable(node, env) {
-  const name = node.name.toLowerCase();
+  const name = (node.name ?? '').toLowerCase();
   const rawArgs = node.args || [];
   const A = async (i) => rawArgs[i] ? evalExpr(rawArgs[i], env) : null;
   const N = async (i) => Number(await A(i)) || 0;
@@ -1066,6 +2602,12 @@ async function evalCallable(node, env) {
     case 'val':   { return parseFloat(String(await A(0)??''))||0; }
     case 'asc':   { return (String(await A(0)??'')).charCodeAt(0)||0; }
     case 'chr$': case 'chr': { return String.fromCharCode(await N(0)); }
+    // Mac type/ID conversion functions
+    case 'cvi': { const s = await S(0); let v=0; for(let i=0;i<s.length&&i<2;i++) v=(v<<8)|s.charCodeAt(i); return v; }
+    case 'cvl': { const s = await S(0); let v=0; for(let i=0;i<s.length&&i<4;i++) v=(v<<8)|s.charCodeAt(i); return v; }
+    case 'cvs': { const s = await S(0); let v=0; for(let i=0;i<s.length&&i<4;i++) v=(v<<8)|s.charCodeAt(i); return v; }
+    case 'mki': { const n_=await N(0); return String.fromCharCode((n_>>8)&0xFF, n_&0xFF); }
+    case 'mkl': { const n_=await N(0)|0; return String.fromCharCode((n_>>24)&0xFF,(n_>>16)&0xFF,(n_>>8)&0xFF,n_&0xFF); }
     case 'hex$': case 'hex': { return (Number(await A(0))|0).toString(16).toUpperCase(); }
     case 'oct$': case 'oct': { return (Number(await A(0))|0).toString(8); }
     case 'instr': { const aa = await all(); return aa.length===2 ? String(aa[0]??'').indexOf(String(aa[1]??''))+1 : String(aa[1]??'').indexOf(String(aa[2]??''),(Number(aa[0])||1)-1)+1; }
@@ -1082,10 +2624,12 @@ async function evalCallable(node, env) {
     case 'dialog': {
       const nn = rawArgs.length > 0 ? await N(0) : -1;
       if (nn === 0 || nn === -1) {
-        // Block until event
-        if (stopRequested) throw new Error('USER_STOP');
+        // Inside a handler: return the event code that triggered this handler
+        if (currentDialogEventCode !== null) return currentDialogEventCode;
+        // Outside handler: block until next event
         const evt = await waitForEvent(0);
-        if (evt.type === 'stop') throw new Error('USER_STOP');
+        if (evt.type === 'stop' && !onStopHandler) throw new Error('USER_STOP');
+        if (evt.type === 'stop' && onStopHandler) { await callEventHandler(onStopHandler); return 0; }
         if (evt.type === 'menu') return 5;    // Mac event code for menu
         if (evt.type === 'mouse') return 1;
         if (evt.type === 'key') return 3;
@@ -1096,7 +2640,15 @@ async function evalCallable(node, env) {
         await alertUser('', msg);
         return 1;
       }
-      return 1;
+      // DIALOG(n) for n>0, single arg: return the reference associated with the current event
+      // This is how ZBasic works: DIALOG(0) returns event type, DIALOG(eventType) returns the ref
+      if (currentDialogEvent !== null) {
+        const ev = currentDialogEvent;
+        if (ev.winRef !== undefined) return ev.winRef;
+        if (ev.ctrlRef !== undefined) return ev.ctrlRef;
+        if (ev.ref !== undefined) return ev.ref;
+      }
+      return frontWindowId ?? outputWindowId ?? 1;
     }
 
     // MENU() — returns last menu selection
@@ -1108,21 +2660,143 @@ async function evalCallable(node, env) {
       return 0;
     }
 
-    // Mouse / input stubs
-    case 'mouse': case 'mousex': case 'mousey': case 'mousebtn': case 'button': return 0;
+    case 'mouse': {
+      if (rawArgs.length === 0) return mouseDown ? 1 : 0;
+      const n_ = await N(0);
+      if (n_ === 0) {
+        // Mac BASIC MOUSE(0) state machine:
+        //   0  = not pressed
+        //   1  = newly pressed (press edge)
+        //  -1  = still held down (drag)
+        //   2  = double-click (second press within ~400ms)
+        if (!mouseDown) {
+          await new Promise(r => setTimeout(r, 10));
+          mousePrevDown = false;
+          return 0;
+        }
+        // Mouse is down
+        if (!mousePrevDown) {
+          // Press edge detected — check if double-click
+          const now = Date.now();
+          const dt = now - mouseLastPressTime;
+          mouseLastPressTime = now;
+          mousePrevDown = true;
+          return (dt < 400 && dt > 50) ? 2 : 1;
+        }
+        // Still held
+        return -1;
+      }
+      if (n_ === 1) return mouseX;
+      if (n_ === 2) return mouseY;
+      return 0;
+    }
+    case 'mousex':   return mouseX;
+    case 'mousey':   return mouseY;
+    case 'mousebtn': return mouseDown ? 1 : 0;
+    case 'button': {
+      if (rawArgs.length === 0) return mouseDown ? 1 : 0;
+      const bid = Math.floor(await N(0));
+      return controlStore[bid]?.value ?? 0;
+    }
+    case 'button&': {
+      const bid = Math.floor(await N(0));
+      return controlStore[bid] ? bid : 0;
+    }
+    case 'edit$': {
+      // EDIT$(fieldId) — read text of an edit field
+      const fid = Math.floor(await N(0));
+      const ctrl = controlStore[fid];
+      return ctrl?.el?.value ?? ctrl?.value ?? '';
+    }
     case 'event': return 0;
     case 'timer': case 'tick': return Date.now() / 17;
-    case 'window': return 1;
-    case 'peek': case 'peek byte': case 'peek word': case 'peek long': return 0;
+    case 'window': {
+      const n_ = rawArgs.length > 0 ? await N(0) : 0;
+      if (n_ === 0) return frontWindowId ?? outputWindowId ?? 1;  // frontmost window
+      if (n_ === 1) return outputWindowId ?? frontWindowId ?? 1;  // output window
+      // WINDOW(n) for n>=2: dimension queries on the front window
+      const wdef = windowDefs[frontWindowId ?? outputWindowId ?? 1];
+      const wc = wdef?.canvas;
+      if (n_ === 2) return wc ? wc.width : 512;     // window width
+      if (n_ === 3) return wc ? wc.height : 342;    // window height
+      if (n_ === 10) return 0;   // local origin H offset
+      if (n_ === 11) return 0;   // local origin V offset
+      if (n_ < 0) return currentEditField ?? 0;  // WINDOW(_EFnum) — current edit field id
+      return 0;
+    }
+    case 'varptr': return 0;  // memory address — stub 0 (used for Toolbox Pascal-string passing)
+    case 'peek': case 'peek byte': { const a = Math.floor(await N(0)); return fakeReadU16(a) & 0xFF; }
+    case 'peek word': { const a = Math.floor(await N(0)); return fakeReadU16(a); }
+    case 'peek long': { const a = Math.floor(await N(0)); return fakeReadU32(a); }
     case 'usr': case 'usr_': return 0;
     case 'screenbits': return 8;
     case 'systemversion': return 0x0700;
     case 'noevent': return -1;
+    case 'system': {
+      const n_ = await N(0);
+      // Mac System globals at well-known offsets
+      if (n_ === 4)  return 0;      // refNum of system resource file
+      if (n_ === 6)  return 512;    // screen width
+      if (n_ === 7)  return 342;    // screen height
+      if (n_ === 8)  return 0x0700; // system version (7.0)
+      if (n_ === 11) return 8;      // screen depth (bits)
+      return 0;
+    }
 
     // Array / misc
     case 'ubound': { const [arr] = await all(); return Array.isArray(arr) ? arr.length-1 : 0; }
     case 'lbound': return 0;
     case 'vartype': return 0;
+
+    case 'ptinrect': {
+      // FN PTINRECT(pt, rect(i)) — always uses current mouseX/mouseY for the point
+      const rectNode = rawArgs[1];
+      let left = 0, top = 0, right = 512, bottom = 512;
+      if (rectNode?.type === 'callable') {
+        const arrName = rectNode.name;
+        const ri0 = rectNode.args?.[0] ? Math.floor(Number(await evalExpr(rectNode.args[0], env))) : 0;
+        const ri1 = rectNode.args?.[1] ? Math.floor(Number(await evalExpr(rectNode.args[1], env))) : null;
+        const arr = env[arrName] ?? globalVars[arrName];
+        if (Array.isArray(arr)) {
+          let row = arr, base = ri0;
+          if (ri1 !== null && Array.isArray(arr[ri0])) { row = arr[ri0]; base = ri1; }
+          left = Number(row[base] ?? 0); top = Number(row[base+1] ?? 0);
+          right = Number(row[base+2] ?? 0); bottom = Number(row[base+3] ?? 0);
+        }
+      }
+      return (mouseX >= left && mouseX < right && mouseY >= top && mouseY < bottom) ? -1 : 0;
+    }
+
+    case 'ptinrgn': return 0;  // region hit-test stub
+
+    case 'bittst': {
+      // FN BITTST(ptr, bit) — test a bit in memory (stub: keyboard state, always false)
+      return 0;
+    }
+    case 'stringwidth': {
+      const str = String(await A(0) ?? '');
+      if (!ctx) return str.length * Math.round(textSize * 0.6);
+      ctx.save(); ctx.font = `${textSize}px Geneva, Helvetica, sans-serif`;
+      const w = Math.round(ctx.measureText(str).width);
+      ctx.restore(); return w;
+    }
+    case 'sizeresource': return 0;
+    case 'finderinfo': return 0;   // FN FINDERINFO(...) — no document from Finder
+    case 'gestalt': return 0;      // FN GESTALT(...) stub
+    case 'countresources': case 'count1resources': return 0;
+    case 'getindresource': case 'get1indresource': case 'getindtype': return 0;
+    case 'curresfile': return 0;
+    case 'countmitems': {
+      const handle = Math.floor(Number(await N(0))) || 0;
+      return menuDefs[handle] ? Object.keys(menuDefs[handle].items).length : 0;
+    }
+    case 'handtohand': return 0;
+    case 'gethandlesize': return 0;
+    case 'sectrect': return 0;
+    case 'equalrect': return 0;
+    case 'getcrefcon': return 0;
+    case 'alert': case 'notealert': case 'caution': case 'stop':
+      return 1;  // alert dialogs always return OK (1)
 
     default: {
       // User function?
@@ -1161,9 +2835,7 @@ function alertUser(title, msg) {
 }
 
 // ── Init ──────────────────────────────────────────────────────
-ctx.fillStyle = '#fff';
-ctx.fillRect(0, 0, canvas.width, canvas.height);
-consoleLog('ZBasic emulator ready.\nOpen a .txt source file to begin.\n');
+console.log('ZBasic emulator ready.');
 </script>
 </body>
 </html>

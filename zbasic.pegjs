@@ -20,7 +20,7 @@ statementWithProgress = s:statement
 statement = comment { return null; }
   / inlineAsm
   / declareStmt / defFn / definition / defCmd / typeBlock / dimVar / commonStmt / defTypeStmt / assignVar
-  / userProcCall / userFuncCall / userLongFuncDef / userLocalFuncDef / printStmt / pokeStmt / sysFuncCall / dataStmt
+  / userProcCall / userFuncCall / userLongFuncDef / userLocalFuncDef / printStmt / pokeStmt / gotoStmt / sysFuncCall / dataStmt
   / includeStmt
   / forLoop / whileLoop / doLoop
   / blockIfCond / ifCond / longIfConf / selectStmt
@@ -34,6 +34,8 @@ inlineAsm = "`" code:(!newline .)*
 
 exprStmt = e:expression { return {type: "exprStmt", expr: e}; }
 
+gotoStmt = cmd:("GOSUB"i / "GOTO"i) ![a-zA-Z0-9_%&!$] __ target:expression
+  { return {type: "sysFuncCall", cmd: cmd.toUpperCase(), keyword: null, args: [target]}; }
 sysFuncCall = cmd:sysCmds ![a-zA-Z0-9_%&!$] chan:("#" expression)? keyword:(__ sysKeyword)? _ args:sysArgs trailer:(_ sysKeyword _ sysArgs)*
   { return {type: "sysFuncCall", cmd: cmd.toUpperCase(), chan: chan ? chan[1] : null,
     keyword: keyword ? keyword[1] : null, args,
@@ -56,11 +58,13 @@ sysCmds = "GOTO"i / "GOSUB"i / "RETURN"i
   / "BLOCKMOVE"i / "LIBRARY"i / "TOOLBOX"i / "INLINE"i / "CHAIN"i
   / "TALK"i / "LINE"i / "PICTURE"i
   / "MINWINDOW"i / "MAXWINDOW"i / "FLUSHEVENTS"i / "SETZOOM"i / "PUSH"i
-  / "TIMER"i / "EVENT"i
+  / "TIMER"i / "EVENT"i / "LOCAL"i
 sysArgs = first:sysArg rest:(_ "," _ sysArg)* {
   return [first, ...rest.map(r => r[3])];
 }
-sysArg = numFromTo / exprFromTo / exprRect / lineRelPoint / exprPoint / channelNum / (!sysKeyword expression) / nop
+sysArg = numFromTo / exprFromTo / exprRect / lineRelPoint / exprPoint / channelNum
+       / !sysKeyword e:expression { return e; }
+       / nop
 lineRelPoint = "-" _ to:exprPoint { return {type: "lineRel", to}; }
 channelNum = "#" n:expression { return {type: "channel", n}; }
 exprRect = from:exprPoint _ "-" _ to:exprPoint
@@ -183,26 +187,32 @@ whileLoop = "WHILE"i __ condition:expression _ separator body:block _ "WEND"i
   { return {type: "while", condition, body}; }
 doLoop = "DO"i _ separator body:block _ "UNTIL"i __ condition:expression
   { return {type: "do_while", condition, body}; }
-onStmt = "ON"i __ expr:expression __ "RETURN"i ![a-zA-Z0-9_%&!#$]
+onStmt = "ON"i __ "MENU"i ![a-zA-Z0-9_%&!#$] __ cmd:("GOSUB"i / "GOTO"i) _ target:expression
+  { return {type: "onEvent", event: "MENU", cmd: cmd.toUpperCase(), handler: target}; }
+  / "ON"i __ "DIALOG"i ![a-zA-Z0-9_%&!#$] __ cmd:("GOSUB"i / "GOTO"i) _ target:expression
+  { return {type: "onEvent", event: "DIALOG", cmd: cmd.toUpperCase(), handler: target}; }
+  / "ON"i __ "MOUSE"i ![a-zA-Z0-9_%&!#$] __ cmd:("GOSUB"i / "GOTO"i) _ target:expression
+  { return {type: "onEvent", event: "MOUSE", cmd: cmd.toUpperCase(), handler: target}; }
+  / "ON"i __ "STOP"i ![a-zA-Z0-9_%&!#$] __ cmd:("GOSUB"i / "GOTO"i) _ target:expression
+  { return {type: "onEvent", event: "STOP", cmd: cmd.toUpperCase(), handler: target}; }
+  / "ON"i __ "TIMER"i _ "(" _ interval:expression _ ")" __ cmd:("GOSUB"i / "GOTO"i) _ target:expression
+  { return {type: "onEvent", event: "TIMER", cmd: cmd.toUpperCase(), handler: target, interval: interval}; }
+  / "ON"i __ "TIMER"i ![a-zA-Z0-9_%&!#$] __ cmd:("GOSUB"i / "GOTO"i) _ target:expression
+  { return {type: "onEvent", event: "TIMER", cmd: cmd.toUpperCase(), handler: target}; }
+  / "ON"i __ "EVENT"i ![a-zA-Z0-9_%&!#$] __ cmd:("GOSUB"i / "GOTO"i) _ target:expression
+  { return {type: "onEvent", event: "EVENT", cmd: cmd.toUpperCase(), handler: target}; }
+  / "ON"i __ expr:expression __ "RETURN"i ![a-zA-Z0-9_%&!#$]
   { return {type: "on", expr, cmd: "RETURN", targets: []}; }
   / "ON"i __ expr:expression __ cmd:("GOSUB"i / "GOTO"i) _ targets:gotoTargets
   { return {type: "on", expr, cmd: cmd.toUpperCase(), targets}; }
-gotoTargets = head:gotoTarget tail:(_ "," _ gotoTarget)*
+gotoTargets = head:expression tail:(_ "," _ expression)*
   { return [head, ...tail.map(t => t[3])]; }
-gotoTargetName = [a-zA-Z_À-ɏ][a-zA-Z0-9_À-ɏ]* { return text().toLowerCase(); }
-gotoTarget = a:gotoTargetName ":" b:gotoTargetName "/" c:gotoTargetName
-  { return {type: "variable", name: a + ":" + b + "/" + c}; }
-  / a:gotoTargetName ":" b:gotoTargetName
-  { return {type: "variable", name: a + ":" + b}; }
-  / first:gotoTargetName rest:(__ gotoTargetName)+
-  { return {type: "variable", name: first + rest.map(r => "_" + r[1]).join("")}; }
-  / expression
 endStmt = "END"i __ "GLOBALS"i { return {type: "endGlobals"}; }
   / "END"i !(__ "FN"i) !(__ "IF"i) !(__ "GLOBALS"i) !(__ "SELECT"i) { return {type: "end"}; }
 dataStmt = "DATA"i __ items:dataArgs
   { return {type: "data", items}; }
-dataArgs = head:dataItem tail:(_ "," _ dataItem)* _ ","?
-  { return [head, ...tail.map(t => t[3])]; }
+dataArgs = head:dataItem tail:(_ "," _ dataItem)* last:(_ ",")?
+  { return [head, ...tail.map(t => t[3]), ...(last ? [{type:'literal',value:''}] : [])]; }
 dataItem = string / float / integer / dataStr
 dataStr = chars:(!("," / newline / comment) .)+ { return {type: "literal", value: text().trim()}; }
 
