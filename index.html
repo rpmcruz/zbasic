@@ -86,6 +86,7 @@ body {
   color: #000;
 }
 .dyn-menu:hover, .dyn-menu.open { background: #000; color: #fff; }
+.dyn-menu.dis { pointer-events: none; color: #aaa; cursor: default; }
 .dyn-menu-drop {
   display: none;
   position: absolute;
@@ -296,6 +297,7 @@ function macRomanToStr(bytes) {
 
 // ── Mac resource store (loaded from .rsrc AppleDouble files) ───
 const rsrcTexts = {};  // lowercase name -> string
+const pictHandleMap = {};  // handle → {id, w, h, color}
 let frontWindowId = null;
 let outputWindowId = null;
 let canvas = null;   // canvas of the output window
@@ -652,8 +654,9 @@ function renderMenuBar() {
   for (const mid of ids) {
     const m = menuDefs[mid];
     if (!m.title) continue;
+    const isBlankTitle = !m.title.trim();
     const wrap = document.createElement('div');
-    wrap.className = 'dyn-menu';
+    wrap.className = 'dyn-menu' + (isBlankTitle ? ' dis' : '');
     wrap.dataset.menuId = mid;
     const titleSpan = document.createElement('span');
     titleSpan.textContent = m.title;
@@ -668,7 +671,7 @@ function renderMenuBar() {
       const isSep = it.title === '-' || it.title === '(-' || it.title.startsWith('---');
       if (isSep) { el.className = 'dyn-menu-item sep'; }
       else {
-        el.className = 'dyn-menu-item' + (it.enabled ? '' : ' dis');
+        el.className = 'dyn-menu-item' + (it.enabled && it.title.trim() ? '' : ' dis');
         el.textContent = (it.checked ? '✓ ' : '    ') + it.title;
         const _mid = mid, _iid = iid;
         el.addEventListener('click', e => {
@@ -681,18 +684,20 @@ function renderMenuBar() {
       drop.appendChild(el);
     }
     wrap.appendChild(drop);
-    wrap.addEventListener('click', e => {
-      e.stopPropagation();
-      const wasOpen = wrap.classList.contains('open');
-      document.querySelectorAll('.dyn-menu.open').forEach(x => x.classList.remove('open'));
-      if (!wasOpen) wrap.classList.add('open');
-    });
-    wrap.addEventListener('mouseover', () => {
-      if (bar.querySelector('.dyn-menu.open') && !wrap.classList.contains('open')) {
+    if (!isBlankTitle) {
+      wrap.addEventListener('click', e => {
+        e.stopPropagation();
+        const wasOpen = wrap.classList.contains('open');
         document.querySelectorAll('.dyn-menu.open').forEach(x => x.classList.remove('open'));
-        wrap.classList.add('open');
-      }
-    });
+        if (!wasOpen) wrap.classList.add('open');
+      });
+      wrap.addEventListener('mouseover', () => {
+        if (bar.querySelector('.dyn-menu.open') && !wrap.classList.contains('open')) {
+          document.querySelectorAll('.dyn-menu.open').forEach(x => x.classList.remove('open'));
+          wrap.classList.add('open');
+        }
+      });
+    }
     bar.appendChild(wrap);
   }
 }
@@ -744,10 +749,19 @@ async function resolveCtrlRect(arg, env) {
       Math.floor(Number(await evalExpr(arg.to[1], env))),
     ];
   }
+  // @varName — address-of a rect variable
+  if (arg.type === 'unary' && arg.operator === '@' && arg.expression?.type === 'variable') {
+    const obj = readVar(env, arg.expression.name);
+    if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+      return [Number(obj.left)||0, Number(obj.top)||0, Number(obj.right)||0, Number(obj.bottom)||0];
+    }
+    if (Array.isArray(obj)) return [Number(obj[0])||0, Number(obj[1])||0, Number(obj[2])||0, Number(obj[3])||0];
+    return null;
+  }
   const v = Math.floor(Number(await evalExpr(arg, env)));
   const varName = fnPtrTable[v];
   if (!varName) return null;
-  const arr = env[varName] ?? globalVars[varName];
+  const arr = readVar(env, varName);
   if (!Array.isArray(arr)) return null;
   return [Number(arr[0])||0, Number(arr[1])||0, Number(arr[2])||0, Number(arr[3])||0];
 }
@@ -942,6 +956,67 @@ async function runProgram() {
   textX = 1; textY = textSize; yieldCounter = 0;
   mouseDown = false; mouseX = 0; mouseY = 0; mousePrevDown = false; mouseLastPressTime = 0;
 
+  // Reset per-run state
+  Object.keys(pictHandleMap).forEach(k => delete pictHandleMap[k]);
+
+  // Inject ZBasic/Mac/PG:PRO built-in constants (normally from _aplIncl + PG:PRO runtime binary)
+  Object.assign(globalVars, {
+    // Booleans
+    '_true': -1, '_false': 0, '_ztrue': -1,
+    // Menu enable/disable/check
+    '_enable': 1, '_disable': 0, '_checked': 2,
+    // QuickDraw pen transfer modes
+    '_srccopy': 0, '_srcxor': 2, '_srcor': 1, '_srcbic': 3,
+    '_patcopy': 8, '_patxor': 10, '_pator': 9, '_notpatcopy': 12,
+    // Fonts
+    '_monaco': 4, '_geneva': 3, '_chicago': 0, '_times': 20, '_helvetica': 21,
+    // Cursors
+    '_arrowcursor': 0, '_ibeamcursor': 1, '_crosscursor': 2, '_pluscursor': 3, '_watchcursor': 4,
+    // PG:PRO action constants
+    '_mainaction': 1, '_menuaction': 2, '_buttonaction': 3, '_mouseaction': 4,
+    '_windowaction': 5, '_fieldaction': 6, '_otheraction': 7,
+    // Main sub-actions
+    '_mainstart': 1, '_mainopen': 2, '_mainsave': 3, '_mainprint': 4,
+    '_maintimer': 5, '_mainshutdown': 6,
+    // Other sub-actions
+    '_othernullevent': 0, '_otherdisk': 1, '_otherswitch': 2, '_otherscrap': 3,
+    '_othercursor': 4, '_otherkeypressed': 5, '_otherbeforemenu': 6,
+    '_otherfilterevent': 7, '_otheruser': 8, '_otheruserinit': 9,
+    '_otheruserupdate': 10, '_otheruserclick': 11, '_otheruserdispose': 12,
+    // Window sub-actions
+    '_windowclose': 1, '_windowupdate': 2, '_windowactivate': 3, '_windowdeactivate': 4,
+    '_windowsized': 5, '_windowmoved': 6, '_windowclicked': 7,
+    '_windowwillzoomout': 8, '_windowwillzoomin': 9, '_windowwillgrow': 10,
+    '_windowdocwillmove': 11,
+    // Field sub-actions
+    '_fieldactivate': 1, '_fieldchanging': 2, '_fieldreturn': 3, '_fieldtab': 4,
+    '_fieldshifttab': 5, '_fieldclear': 6, '_fieldleft': 7, '_fieldright': 8,
+    '_fieldup': 9, '_fielddown': 10, '_fieldkeypressed': 11, '_fieldclicked': 12,
+    // Mouse click status
+    '_noclick': 0, '_click1': 1, '_click2': 2, '_click1was': 3, '_click2was': 4,
+    '_click1ndrag': 5, '_click2ndrag': 6, '_click3ndrag': 7,
+    // Mac constants
+    '_mbarheight': 20, '_noerr': 0, '_macplus': 1,
+    '_evtblksize': 16,
+    // PG:PRO dialog pre-action codes
+    '_premenuclick': 1, '_prewndgrow': 2, '_wndmoved': 3, '_wndsized': 4,
+    '_prewndzoomin': 5, '_prewndzoomout': 6, '_wnddocwillmove': 7,
+    // MultiFinder event sub-codes
+    '_mfresume': 1, '_mfsuspend': 2, '_mfclipboard': 4, '_mfmouse': 8,
+    // WINDOW() function argument constants (negative values for special queries)
+    '_activewnd': -1, '_outputwnd': -2, '_outputwclass': -3,
+    '_wndpointer': -4, '_efnum': -5, '_lastefnum': -6,
+    '_selstart': -7, '_selend': -8, '_eftextlen': -9,
+    // Edit field border/style
+    '_noframed': 0, '_framed': 1, '_statnoframed': 2, '_statframed': 3,
+    // Justification
+    '_centerjust': 0, '_leftjust': -1, '_rightjust': 1,
+    // Resource handle flags
+    '_resource%': 0x20, '_respurgeable%': 0x40,
+    // Misc Mac
+    '_graphicobj': 0,
+  });
+
   collectPass(currentProgram, funcDefs, dataStore);
   getOrCreateWindow(1, null, 512, 342);
   setOutputWindow(1);
@@ -1087,27 +1162,54 @@ async function execStmt(stmt, env) {
     case 'dim': return execDim(stmt, env);
     case 'def': case 'defCmd': return;  // compiler directives — ignored at runtime
     case 'label': case 'data': case 'comment': case 'remark': return;  // not executable
+    case 'endGlobals': case 'includeFile': return;  // PG:PRO framework directives — no-op
     default: console.log(`unsupported stmt: ${stmt.type}`); return;
   }
 }
 
 // ── assign ────────────────────────────────────────────────────
+// ZBasic type suffixes %&!# are just type hints — strip them for storage lookup.
+// ($ stays because string variables are distinct from numeric variables.)
+function normVarName(name) {
+  return (name && /[%&!#]$/.test(name)) ? name.slice(0, -1) : name;
+}
+
+function readVar(env, name) {
+  const n = normVarName(name);
+  if (n in env) return env[n];
+  if (n in globalVars) return globalVars[n];
+  if (name in env) return env[name];
+  if (name in globalVars) return globalVars[name];
+  return undefined;
+}
+
 function writeVar(env, name, val) {
   // In ZBasic, variables are global unless they're function parameters (own properties of local env).
   // If the name is an own property of env (i.e., a parameter or locally declared var), write there.
   // Otherwise write to globalVars so user functions can modify shared state.
-  if (env === globalVars || Object.prototype.hasOwnProperty.call(env, name)) {
-    env[name] = val;
+  const n = normVarName(name);
+  if (env === globalVars || Object.prototype.hasOwnProperty.call(env, n) || Object.prototype.hasOwnProperty.call(env, name)) {
+    env[n] = val;
   } else {
-    globalVars[name] = val;
+    globalVars[n] = val;
   }
 }
 
 async function execAssign(stmt, env) {
   const val = await evalExpr(stmt.value, env);
   const name = stmt.name;
+  if (stmt.fields && stmt.fields.length > 0 && stmt.idx) {
+    // Struct array: gShopper.SLoc.v%(0) = x → flat array 'gshopper.sloc.v%'[0] = x
+    const flatName = (name + '.' + stmt.fields.join('.')).toLowerCase();
+    const idxs = await Promise.all(stmt.idx.map(x => evalExpr(x, env)));
+    const idx = idxs[0] ?? 0;
+    let arr = env[flatName] ?? globalVars[flatName];
+    if (!Array.isArray(arr)) { arr = []; globalVars[flatName] = arr; }
+    arr[idx] = val;
+    return;
+  }
   if (stmt.idx) {
-    const arr = env[name] ?? globalVars[name];
+    const arr = readVar(env, name);
     const idxs = await Promise.all(stmt.idx.map(x => evalExpr(x, env)));
     if (Array.isArray(arr)) {
       let a = arr;
@@ -1117,7 +1219,7 @@ async function execAssign(stmt, env) {
     return;
   }
   if (stmt.fields && stmt.fields.length > 0) {
-    const target = env[name] ?? globalVars[name] ?? {};
+    const target = readVar(env, name) ?? {};
     writeVar(env, name, target);
     let obj = target;
     for (let i = 0; i < stmt.fields.length - 1; i++) obj = obj[stmt.fields[i]] || (obj[stmt.fields[i]] = {});
@@ -1224,7 +1326,13 @@ async function execSysCall(stmt, env) {
           gfxPenMode = mode;
         }
       }
-      ctx.lineWidth = penWidth;
+      if (args.length >= 5 && args[4] !== null) {
+        // Mac pen patterns: 0=default(black), 1=ltGray, 2=gray, 3=dkGray, 4=black, 5=lightGray
+        const pat = Math.round(await n(4));
+        const grayMap = {0:'#000000', 1:'#bbbbbb', 2:'#888888', 3:'#555555', 4:'#000000', 5:'#999999'};
+        currentFg = grayMap[pat] ?? '#000000';
+      }
+      if (ctx) ctx.lineWidth = penWidth;
       return;
     }
 
@@ -1357,10 +1465,28 @@ async function execSysCall(stmt, env) {
         dx = Math.floor(Number(await evalExpr(a0.from[0], env)));
         dy = Math.floor(Number(await evalExpr(a0.from[1], env)));
       } else return;
+      const isXor = stmt.trailer?.some(t => t.keyword === 'XOR');
       if (a1.type === 'callable' || a1.type === 'variable') {
         const idx = a1.args?.[0] ? Math.floor(Number(await evalExpr(a1.args[0], env))) : 0;
         const imgData = spriteBuffer[`${a1.name}_${idx}`];
-        if (imgData) ctx.putImageData(imgData, dx * CANVAS_SCALE, dy * CANVAS_SCALE);
+        if (imgData) {
+          if (isXor) {
+            // XOR blend: read canvas pixels and XOR with sprite pixels
+            const sdx = dx * CANVAS_SCALE, sdy = dy * CANVAS_SCALE;
+            const w = imgData.width, h = imgData.height;
+            const bg = ctx.getImageData(sdx, sdy, w, h);
+            const sp = imgData.data, bg_ = bg.data;
+            for (let i = 0; i < sp.length; i += 4) {
+              bg_[i]   ^= sp[i];
+              bg_[i+1] ^= sp[i+1];
+              bg_[i+2] ^= sp[i+2];
+              bg_[i+3] = 255;
+            }
+            ctx.putImageData(bg, sdx, sdy);
+          } else {
+            ctx.putImageData(imgData, dx * CANVAS_SCALE, dy * CANVAS_SCALE);
+          }
+        }
       }
       return;
     }
@@ -1564,8 +1690,22 @@ async function execSysCall(stmt, env) {
       }
       return;
     }
-    case 'INC': { const nm = args[0]?.type === 'variable' ? args[0].name : null; if (nm) env[nm] = (env[nm]||0)+1; return; }
-    case 'DEC': { const nm = args[0]?.type === 'variable' ? args[0].name : null; if (nm) env[nm] = (env[nm]||0)-1; return; }
+    case 'INC': case 'DEC': {
+      const delta = cmd === 'INC' ? 1 : -1;
+      const a0 = args[0];
+      if (!a0) return;
+      if (a0.type === 'variable') {
+        writeVar(env, a0.name, (Number(readVar(env, a0.name))||0) + delta);
+      } else if (a0.type === 'chainAccess' && a0.args !== null) {
+        // INC(gShopper.STargetLine%(i)) — flat array increment
+        const flatName = (a0.name + '.' + a0.fields.join('.')).toLowerCase();
+        const idx = Math.floor(Number(await evalExpr(a0.args?.[0], env) ?? 0));
+        let arr = env[flatName] ?? globalVars[flatName];
+        if (!Array.isArray(arr)) { arr = []; globalVars[flatName] = arr; }
+        arr[idx] = (Number(arr[idx])||0) + delta;
+      }
+      return;
+    }
 
     case 'BREAK':
       // On Mac, BREAK ON/OFF enabled/disabled Command+Period interrupting the program. Not implemented.
@@ -1597,6 +1737,8 @@ async function execSysCall(stmt, env) {
         dialogOn = true;
         await new Promise(r => setTimeout(r, 0));
         await fireEventHandlers();
+        // Fire null event when queue is empty (simulates Mac null event)
+        if (onEventHandler) await callEventHandler(onEventHandler);
         return;
       }
       if (stmt.keyword === 'OFF') { dialogOn = false; return; }
@@ -1714,6 +1856,20 @@ async function execSysCall(stmt, env) {
       // GLOBALS GOSUB label / GLOBALS GOTO label — call subroutine in global context
       if (stmt.keyword === 'GOSUB' && args[0]) throw new GosubSignal(labelOf(args[0]));
       if (stmt.keyword === 'GOTO'  && args[0]) throw new GotoSignal(labelOf(args[0]));
+      // GLOBALS "filename" — execute the GLBL file's DIM/equate statements
+      if (args[0]?.type === 'literal' && typeof args[0].value === 'string') {
+        const glblName = args[0].value;
+        if (files[glblName]) {
+          try {
+            const glblStmts = flattenIncludes(parser.parse(files[glblName], {parseFile: () => []}));
+            await execBlock(glblStmts, globalVars);
+          } catch(e) {
+            if (!(e instanceof GotoSignal) && !(e instanceof GosubSignal) && !(e instanceof ReturnSignal)) {
+              console.warn(`GLOBALS "${glblName}" exec error: ${e.message ?? e}`);
+            }
+          }
+        }
+      }
       return;
     }
 
@@ -1780,17 +1936,56 @@ async function execSysCall(stmt, env) {
       return;
     }
 
-    // No-op stubs — not implementable in a browser context
-    case 'COORDINATE': case 'PICTURE':
-    case 'RESOURCES': case 'COMPILE': case 'DEFSTR':
+    case 'PICTURE': {
+      // PICTURE (x,y), handle — draw a PICT resource at position
+      if (!ctx || !args[0] || !args[1]) return;
+      const px = Math.floor(Number(await evalExpr(args[0].x ?? args[0].from?.[0], env)));
+      const py = Math.floor(Number(await evalExpr(args[0].y ?? args[0].from?.[1], env)));
+      const handle = Math.floor(Number(await evalExpr(args[1], env)));
+      const pict = pictHandleMap[handle];
+      if (pict) {
+        ctx.fillStyle = pict.color;
+        ctx.fillRect(px, py, pict.w, pict.h);
+      }
+      return;
+    }
+
+    case 'BLOCKMOVE': {
+      // BLOCKMOVE src, @dstVar, len — copy fake memory bytes into a variable
+      if (args.length < 2) return;
+      const dst = args[1];
+      if (dst && dst.type === 'unary' && dst.operator === '@' && dst.expression?.type === 'variable') {
+        const src = Math.floor(Number(await evalExpr(args[0], env)));
+        const len = args[2] ? Math.floor(Number(await evalExpr(args[2], env))) : 8;
+        if (len === 8 || len === 4) {
+          // Read as rect (top, left, bottom, right) or point (v, h)
+          const top  = fakeReadU16(src);
+          const left = fakeReadU16(src + 2);
+          const bot  = len >= 8 ? fakeReadU16(src + 4) : 0;
+          const rgt  = len >= 8 ? fakeReadU16(src + 6) : 0;
+          const varName = dst.expression.name;
+          const obj = len >= 8 ? {top, left, bottom: bot, right: rgt, v: top, h: left}
+                                : {v: top, h: left};
+          writeVar(env, varName, obj);
+          // Also set individual fields if they exist in globalVars as a struct
+          if (globalVars[varName] && typeof globalVars[varName] === 'object')
+            Object.assign(globalVars[varName], obj);
+        }
+      }
+      return;
+    }
+
+    // No-op stubs — compiler directives or Mac-only features not available in a browser
+    case 'COORDINATE':
+    case 'RESOURCES': case 'COMPILE': case 'DEFSTR': case 'GLOBALS':
     case 'LIBRARY': case 'TOOLBOX': case 'INLINE': case 'CHAIN':
-    case 'BLOCKMOVE': case 'TALK':
+    case 'TALK':
     case 'MINWINDOW': case 'MAXWINDOW': case 'SETZOOM':
     case 'SPEED': case 'LPRINT': case 'LLIST':
     case 'HPLOT': case 'HCOLOR': case 'HGRAPH': case 'SCRN':
     case 'FLASH': case 'POKE': case 'RESUME': case 'APPLE':
     case 'ROUTE': case 'RATIO': case 'SETSELECT': case 'PUSH': case 'LOCAL':
-      console.log(`unimplemented: ${cmd}${stmt.keyword ? ' ' + stmt.keyword : ''}`);
+    case 'RANDOM':
       return;
 
     case 'EDIT': {
@@ -2116,11 +2311,28 @@ async function execProcCall(stmt, env) {
     // ── setrect / rect math — write back to array via AST arg ───
     case 'setrect': case 'offsetrect': case 'insetrect': {
       const arg0 = stmt.args?.[0];
+      if (arg0?.type === 'variable') {
+        // CALL SETRECT(rect, left, top, right, bottom) — write struct to variable
+        const varName = arg0.name;
+        const cur = readVar(env, varName) ?? {};
+        if (name === 'setrect') {
+          const obj = {left: Number(await ev(1))||0, top: Number(await ev(2))||0,
+                       right: Number(await ev(3))||0, bottom: Number(await ev(4))||0};
+          writeVar(env, varName, {...(typeof cur==='object'?cur:{}), ...obj});
+        } else if (name === 'offsetrect') {
+          const dh = Number(await ev(1))||0, dv = Number(await ev(2))||0;
+          if (typeof cur === 'object') { cur.top+=dv; cur.left+=dh; cur.bottom+=dv; cur.right+=dh; writeVar(env, varName, cur); }
+        } else if (name === 'insetrect') {
+          const dh = Number(await ev(1))||0, dv = Number(await ev(2))||0;
+          if (typeof cur === 'object') { cur.top+=dv; cur.left+=dh; cur.bottom-=dv; cur.right-=dh; writeVar(env, varName, cur); }
+        }
+        return;
+      }
       if (arg0?.type === 'callable') {
         const arrName = arg0.name;
         const i0 = arg0.args?.[0] ? Math.floor(Number(await evalExpr(arg0.args[0], env))) : 0;
         const i1 = arg0.args?.[1] ? Math.floor(Number(await evalExpr(arg0.args[1], env))) : null;
-        const arr = env[arrName] ?? globalVars[arrName];
+        const arr = readVar(env, arrName);
         if (Array.isArray(arr)) {
           let target = arr, base = i0;
           if (i1 !== null && Array.isArray(arr[i0])) { target = arr[i0]; base = i1; }
@@ -2391,9 +2603,30 @@ async function execUserFuncCall(stmt, env) {
         return menuDefs[handle] ? Object.keys(menuDefs[handle].items).length : 0;
       }
       case 'finderinfo': return 0;
-      case 'getresource': case 'get1resource': case 'count1resources':
-      case 'getindresource': case 'get1indresource':
-        return 0;
+      case 'count1resources': return 0;
+      case 'getindresource': case 'get1indresource': return 0;
+      case 'getresource': case 'get1resource': {
+        // FN GETRESOURCE(type&, id%) -> handle
+        // For PICT resources, create a fake handle with picSize + picFrame rect
+        const typeArg = stmt.args?.[0];
+        const isPict = typeArg && typeArg.type === 'namedConst' && typeArg.name.toUpperCase() === 'PICT';
+        if (!isPict) return 0;
+        const pictId = Math.floor(Number(await ev(1)) ?? 0);
+        // Dimensions for known PICT IDs in the Supermarket app
+        const pictDims = {4000:[280,500,'#888888'], 5000:[30,50,'#c8a060'], 5001:[20,8,'#00aa00'], 5004:[20,20,'#0066cc']};
+        const [ph, pw, color] = pictDims[pictId] ?? [20, 20, '#aaaaaa'];
+        // PICT data: 2-byte picSize + 8-byte picFrame (top,left,bottom,right as int16 big-endian)
+        const dataAddr = fakeMalloc(10);
+        fakeWriteU16(dataAddr, 10);          // picSize
+        fakeWriteU16(dataAddr+2, 0);         // top
+        fakeWriteU16(dataAddr+4, 0);         // left
+        fakeWriteU16(dataAddr+6, ph);        // bottom
+        fakeWriteU16(dataAddr+8, pw);        // right
+        const handle = fakeMalloc(4);
+        fakeWriteU32(handle, dataAddr);
+        pictHandleMap[handle] = {id: pictId, w: pw, h: ph, color};
+        return handle;
+      }
       case 'getnamedresource': case 'get1namedresource': {
         // FN GETNAMEDRESOURCE(type&, name$) -> handle or 0
         const name = String((await ev(1)) ?? '').toLowerCase();
@@ -2464,6 +2697,14 @@ async function execUserFuncCall(stmt, env) {
     const ptrName = fn.using.name;
     const handle = Math.floor(Number(env[ptrName] ?? globalVars[ptrName] ?? 0));
     const targetName = fnPtrTable[handle];
+    // pGbuild(wndClass) — pointer is 0 (unresolved PG:PRO stub); create window + fire update
+    if (!targetName && stmt.name.replace(/\s+/g,'').toLowerCase() === 'pgbuild') {
+      const wndNum = Math.floor(Number(await evalExpr(stmt.args?.[0], env) ?? 1));
+      getOrCreateWindow(wndNum, null, 512, 342);
+      setOutputWindow(wndNum);
+      eventQueue.push({type:'dialog', code:5, winRef:wndNum});
+      return null;
+    }
     if (!targetName || !funcDefs[targetName]) return null;
     return execUserFuncCall({...stmt, name: targetName}, env);
   }
@@ -2483,11 +2724,17 @@ async function evalExpr(node, env) {
     case 'constant':    return node.value;
     case 'literal':     return node.value;
     case 'variable': {
-      if (node.name in env) return env[node.name];
-      if (node.name in globalVars) return globalVars[node.name];
-      return 0;
+      const rv = readVar(env, node.name);
+      return rv !== undefined ? rv : 0;
     }
     case 'chainAccess': {
+      if (node.args !== null) {
+        // Struct array: gShopper.SLoc.v%(0) → flat array key = 'gshopper.sloc.v%'
+        const flatName = (node.name + '.' + node.fields.join('.')).toLowerCase();
+        const idx = Math.floor(Number(await evalExpr(node.args?.[0], env) ?? 0));
+        const arr = env[flatName] ?? globalVars[flatName];
+        return (Array.isArray(arr) ? arr[idx] : null) ?? 0;
+      }
       let v = env[node.name] ?? globalVars[node.name] ?? {};
       for (const f of node.fields) v = (v && typeof v === 'object') ? v[f] : null;
       return v ?? 0;
@@ -2498,7 +2745,7 @@ async function evalExpr(node, env) {
     case 'userFuncCall': return execUserFuncCall(node, env);
     case 'namedConst':  return 0;
     case 'lineRef':     return node.label;
-    case 'deref':       return evalExpr(node.expr, env);
+    case 'deref': { const addr = Math.floor(Number(await evalExpr(node.expr, env))); return fakeReadU32(addr); }
     case 'compileConst': return evalExpr(node.expr, env);
     default: return 0;
   }
@@ -2587,7 +2834,13 @@ async function evalCallable(node, env) {
     case 'tan':   { return Math.tan(await N(0)); }
     case 'atn': case 'atan': { return Math.atan(await N(0)); }
     case 'atan2': { return Math.atan2(await N(0), await N(1)); }
-    case 'rnd':   { return Math.random(); }
+    case 'rnd': {
+      if (rawArgs.length > 0) {
+        const n = Math.floor(await N(0));
+        return n > 0 ? Math.floor(Math.random() * n) + 1 : Math.random();
+      }
+      return Math.random();
+    }
     case 'max':   { const aa = await all(); return Math.max(...aa.map(Number)); }
     case 'min':   { const aa = await all(); return Math.min(...aa.map(Number)); }
     case 'pi':    return Math.PI;
@@ -2717,11 +2970,21 @@ async function evalCallable(node, env) {
       // WINDOW(n) for n>=2: dimension queries on the front window
       const wdef = windowDefs[frontWindowId ?? outputWindowId ?? 1];
       const wc = wdef?.canvas;
-      if (n_ === 2) return wc ? wc.width : 512;     // window width
-      if (n_ === 3) return wc ? wc.height : 342;    // window height
+      if (n_ === 2) return wdef ? wdef.logW : 512;    // window width
+      if (n_ === 3) return wdef ? wdef.logH : 342;    // window height
       if (n_ === 10) return 0;   // local origin H offset
       if (n_ === 11) return 0;   // local origin V offset
-      if (n_ < 0) return currentEditField ?? 0;  // WINDOW(_EFnum) — current edit field id
+      // Negative constants (injected as globalVars with _ prefix)
+      if (n_ === -1) return frontWindowId ?? outputWindowId ?? 1;   // _activeWnd
+      if (n_ === -2) return outputWindowId ?? frontWindowId ?? 1;   // _outputWnd
+      if (n_ === -3) return outputWindowId ?? frontWindowId ?? 1;   // _outputWClass (window class)
+      if (n_ === -4) return 0;   // _wndPointer — Mac WindowPtr (no-op)
+      if (n_ === -5) return currentEditField ?? 0;   // _EFnum — current edit field
+      if (n_ === -6) return currentEditField ?? 0;   // _lastEFnum
+      if (n_ === -7) return 0;   // _selStart
+      if (n_ === -8) return 0;   // _selEnd
+      if (n_ === -9) return 0;   // _EFTextLen
+      if (n_ < 0) return currentEditField ?? 0;
       return 0;
     }
     case 'varptr': return 0;  // memory address — stub 0 (used for Toolbox Pascal-string passing)
