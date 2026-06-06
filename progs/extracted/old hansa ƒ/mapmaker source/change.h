@@ -1,1 +1,0 @@
-#define _H_changevoid 	ChangeMapType(MenuHandle mHandle, int item);void 	ChangeTerrain(Point mark);Point	FindHex(Point mark);

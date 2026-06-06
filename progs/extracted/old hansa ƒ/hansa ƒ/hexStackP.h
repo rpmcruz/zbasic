@@ -1,1 +1,0 @@
-/* this contains the private data for hex stack */#define hexStackSize 100static short top = -1;static Point hexStack[hexStackSize];static short stackCost[hexStackSize], reverseCost[hexStackSize];void setStackCost(void);

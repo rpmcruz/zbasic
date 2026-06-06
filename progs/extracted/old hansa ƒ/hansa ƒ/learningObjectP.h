@@ -1,1 +1,0 @@
-#pragma oncestatic Boolean learningMode = false;

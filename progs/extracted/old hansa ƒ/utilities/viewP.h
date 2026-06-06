@@ -1,1 +1,0 @@
-/* this is the .h file for the private part of the view module.			*/#pragma oncestatic enum goodTypes	currentView = noGood;static enum viewMode	currentViewMode = noView;

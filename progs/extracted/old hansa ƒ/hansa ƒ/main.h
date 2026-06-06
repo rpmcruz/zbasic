@@ -1,1 +1,0 @@
-// this is the .h file for main.c#pragma onceenum mouseEventType {	singleClick, doubleClick, dragClick};

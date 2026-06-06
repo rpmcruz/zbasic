@@ -1,1 +1,0 @@
-/* this is the .h file for the private section of the addterrain module	*/#define _H_addterrainprivate#include "map.h"#include "utilities.h"#include "windowsMapmaker.h"static Str255 rfn = "\pni";

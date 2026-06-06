@@ -1,1 +1,0 @@
-#pragma oncevoid ActivateAnimation(void);void AddAnimationPath(short, short);void DeactivateAnimation(void);void InitAnimation(void);void UpdateAnimation(void);

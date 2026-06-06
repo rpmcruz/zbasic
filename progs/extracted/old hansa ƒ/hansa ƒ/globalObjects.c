@@ -1,1 +1,0 @@
-/* this file contains the initializations for global objects. */

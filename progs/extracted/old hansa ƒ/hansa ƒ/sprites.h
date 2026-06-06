@@ -1,1 +1,0 @@
-/* this is the public .h file for sprite manipulation, used to access the sprite world */void InitializeSpriteEnvironment(void);

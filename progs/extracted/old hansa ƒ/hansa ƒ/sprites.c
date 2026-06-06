@@ -1,1 +1,0 @@
-/* sprite package */#include "sprites.h"#include "spritesP.h"void InitializeSpriteEnvironment(){}	

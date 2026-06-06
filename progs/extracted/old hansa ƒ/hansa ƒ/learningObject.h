@@ -1,1 +1,0 @@
-#pragma onceBoolean GetLearningMode(void);Boolean	ToggleLearningMode(void);

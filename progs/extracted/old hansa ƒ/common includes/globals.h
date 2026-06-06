@@ -1,1 +1,0 @@
-/* this file contains global declarations common to lots of areas */#pragma once#define nullString (StringPtr)"\p"
