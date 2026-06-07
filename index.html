@@ -296,7 +296,9 @@ function macRomanToStr(bytes) {
 }
 
 // ── Mac resource store (loaded from .rsrc AppleDouble files) ───
-const rsrcTexts = {};  // lowercase name -> string
+const rsrcTexts = {};    // lowercase name -> string
+const macResources = {}; // resType → [{id, name, data: Uint8Array}]
+let programDir = null;   // directory name inferred from loaded files (e.g. 'supermarket')
 const pictHandleMap = {};  // handle → {id, w, h, color}
 let frontWindowId = null;
 let outputWindowId = null;
@@ -479,7 +481,18 @@ document.getElementById('file-input').addEventListener('change', function(e) {
 
   // Reset store so re-opening a folder starts fresh.
   Object.keys(files).forEach(k => delete files[k]);
+  Object.keys(rsrcTexts).forEach(k => delete rsrcTexts[k]);
+  Object.keys(macResources).forEach(k => delete macResources[k]);
   loadedFiles.length = 0;
+  programDir = null;
+
+  // Infer programDir from webkitRelativePath (e.g. "supermarket/Supermarket.MAIN" → "supermarket")
+  for (const file of flist) {
+    if (file.webkitRelativePath) {
+      const parts = file.webkitRelativePath.split('/');
+      if (parts.length >= 2) { programDir = parts[0]; break; }
+    }
+  }
 
   let pending = flist.length;
   flist.forEach(file => {
@@ -523,11 +536,12 @@ function parseRsrcFile(buffer) {
   for (let i = 0; i < numTypes; i++) {
     const tOff = typeListAbs + 2 + i*8;
     const rtype = String.fromCharCode(r.getUint8(tOff),r.getUint8(tOff+1),r.getUint8(tOff+2),r.getUint8(tOff+3));
-    if (rtype !== 'TEXT') continue;
     const count = r.getUint16(tOff+4) + 1;
     const refListAbs = typeListAbs + r.getUint16(tOff+6);
+    if (!macResources[rtype]) macResources[rtype] = [];
     for (let j = 0; j < count; j++) {
       const rr = refListAbs + j*12;
+      const resId = r.getInt16(rr);
       const nameOffRel = r.getUint16(rr+2);
       const resDataOff = dataOff + (r.getUint32(rr+4) & 0x00FFFFFF);
       const resLen = r.getUint32(resDataOff);
@@ -536,12 +550,69 @@ function parseRsrcFile(buffer) {
         const nl = r.getUint8(nameListAbs + nameOffRel);
         for (let k = 0; k < nl; k++) name += String.fromCharCode(r.getUint8(nameListAbs + nameOffRel + 1 + k));
       }
-      const bytes = new Uint8Array(buffer, rsrcOff + resDataOff + 4, resLen);
-      rsrcTexts[name.toLowerCase()] = macRomanToStr(bytes);
-      console.log(`  rsrc TEXT: "${name}" (${resLen} bytes)`);
+      const data = new Uint8Array(buffer, rsrcOff + resDataOff + 4, resLen);
+      macResources[rtype].push({id: resId, name, data});
+      if (rtype === 'TEXT') {
+        rsrcTexts[name.toLowerCase()] = macRomanToStr(data);
+        console.log(`  rsrc TEXT: "${name}" (${resLen} bytes)`);
+      }
     }
   }
-  console.log(`Loaded ${Object.keys(rsrcTexts).length} TEXT resources from .rsrc`);
+  console.log(`Loaded rsrc: ${Object.keys(macResources).map(t => `${t}×${macResources[t].length}`).join(' ')}`);
+  initMenuBarFromResources();
+}
+
+function parseMENU(data) {
+  const v = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const menuId = v.getInt16(0);
+  const enableFlags = v.getUint32(10);
+  const titleLen = data[14];
+  const title = macRomanToStr(data.slice(15, 15 + titleLen));
+  const items = [];
+  let pos = 15 + titleLen;
+  let itemNum = 1;
+  while (pos < data.length) {
+    const nameLen = data[pos++];
+    if (nameLen === 0) break;
+    const name = macRomanToStr(data.slice(pos, pos + nameLen));
+    pos += nameLen;
+    const icon = data[pos++];
+    const cmd  = data[pos++];
+    const mark = data[pos++];
+    const style = data[pos++];
+    const enabled = !!((enableFlags >> itemNum) & 1);
+    items.push({name, cmd, icon, mark, style, enabled});
+    itemNum++;
+  }
+  return {menuId, title, items};
+}
+
+function initMenuBarFromResources() {
+  const mbars = macResources['MBAR'];
+  if (!mbars || mbars.length === 0) return;
+  const mbarData = mbars[0].data;
+  const v = new DataView(mbarData.buffer, mbarData.byteOffset);
+  const n = v.getUint16(0);
+  const menuIds = [];
+  for (let i = 0; i < n; i++) menuIds.push(v.getUint16(2 + i * 2));
+  const menus = macResources['MENU'] ?? [];
+  for (const rawId of menuIds) {
+    const menuRes = menus.find(m => m.id === rawId);
+    if (!menuRes) continue;
+    const {menuId, title, items} = parseMENU(menuRes.data);
+    const actualId = rawId === 127 ? 255 : rawId;  // Apple menu → 255
+    const menuTitle = actualId === 255 ? '\u{1F34E}' : title;
+    menuDefs[actualId] = {title: menuTitle, enabled: true, items: {}};
+    items.forEach((it, idx) => {
+      menuDefs[actualId].items[idx + 1] = {
+        title: it.name,
+        enabled: it.enabled,
+        checked: false,
+        cmd: it.cmd ? String.fromCharCode(it.cmd) : null
+      };
+    });
+  }
+  renderMenuBar();
 }
 
 function openFile() { document.getElementById('file-input').click(); }
@@ -1819,6 +1890,20 @@ async function execSysCall(stmt, env) {
         enabled = Number(await a(2));
         title   = args[3] ? String(await a(3)) : null;
         if (menuId === 0) return;
+        // MENU menuId,-2,1 — insert sub-menu from MENU resource
+        if (itemId === -2) {
+          const menus = macResources['MENU'] ?? [];
+          const menuRes = menus.find(m => m.id === menuId);
+          if (menuRes) {
+            const {title: mTitle, items} = parseMENU(menuRes.data);
+            menuDefs[menuId] = {title: mTitle, enabled: true, items: {}};
+            items.forEach((it, idx) => {
+              menuDefs[menuId].items[idx + 1] = {title: it.name, enabled: it.enabled, checked: false};
+            });
+            renderMenuBar();
+          }
+          return;
+        }
         if (title !== null) {
           setMenu(menuId, itemId, !!enabled, title);
         } else {
@@ -2032,9 +2117,30 @@ async function execSysCall(stmt, env) {
       return;
     }
 
+    case 'RESOURCES': {
+      // If macResources already has MENU data, nothing to do
+      if (macResources['MENU']?.length) { initMenuBarFromResources(); return; }
+      // Try to auto-fetch the .rsrc sidecar from the server
+      const rsrcFilename = stmt.args?.[0];
+      const rsrcName = (typeof rsrcFilename === 'string' ? rsrcFilename
+        : rsrcFilename?.type === 'literal' && typeof rsrcFilename.value === 'string' ? rsrcFilename.value : null);
+      if (rsrcName && programDir) {
+        const url = `progs/extracted/${programDir}/${rsrcName}.rsrc`;
+        try {
+          const resp = await fetch(url);
+          if (resp.ok) {
+            const buf = await resp.arrayBuffer();
+            parseRsrcFile(buf);
+          }
+        } catch(e) { /* server not running or file absent — silently skip */ }
+      }
+      initMenuBarFromResources();
+      return;
+    }
+
     // No-op stubs — compiler directives or Mac-only features not available in a browser
     case 'COORDINATE':
-    case 'RESOURCES': case 'COMPILE': case 'DEFSTR': case 'GLOBALS':
+    case 'COMPILE': case 'DEFSTR': case 'GLOBALS':
     case 'LIBRARY': case 'TOOLBOX': case 'INLINE': case 'CHAIN':
     case 'TALK':
     case 'MINWINDOW': case 'MAXWINDOW': case 'SETZOOM':
@@ -2675,8 +2781,26 @@ async function execUserFuncCall(stmt, env) {
         return menuDefs[handle] ? Object.keys(menuDefs[handle].items).length : 0;
       }
       case 'finderinfo': return 0;
-      case 'count1resources': return 0;
-      case 'getindresource': case 'get1indresource': return 0;
+      case 'count1resources': case 'countresources': {
+        const typeArg = stmt.args?.[0];
+        const typeStr = typeArg?.type === 'namedConst' ? typeArg.name : null;
+        if (!typeStr) return 0;
+        return (macResources[typeStr] ?? []).length;
+      }
+      case 'getindresource': case 'get1indresource': {
+        const typeArg = stmt.args?.[0];
+        const typeStr = typeArg?.type === 'namedConst' ? typeArg.name : null;
+        if (!typeStr) return 0;
+        const idx = Math.floor(Number(await ev(1))) - 1;
+        const resources = macResources[typeStr] ?? [];
+        if (idx < 0 || idx >= resources.length) return 0;
+        const res = resources[idx];
+        const dataAddr = fakeMalloc(res.data.length);
+        fakeWriteBytes(dataAddr, res.data);
+        const handle = fakeMalloc(4);
+        fakeWriteU32(handle, dataAddr);
+        return handle;
+      }
       case 'getresource': case 'get1resource': {
         // FN GETRESOURCE(type&, id%) -> handle
         // For PICT resources, create a fake handle with picSize + picFrame rect
@@ -2734,7 +2858,12 @@ async function execUserFuncCall(stmt, env) {
       case 'getnewdialog': return 0;
       case 'getcrefcon': return 0;
       case 'getcref': return 0;
-      case 'pstr$': return '';  // Pascal string pointer to string
+      case 'pstr$': {
+        const addr = Math.floor(Number(await ev(0)) ?? 0);
+        if (!addr) return '';
+        const len = fakeReadBytes(addr, 1)[0];
+        return macRomanToStr(fakeReadBytes(addr + 1, len));
+      }
       case 'tehandle': return 0;
       case 'tenew': {
         const h = await makeTeHandle(stmt.args?.[1], env);
@@ -2759,7 +2888,12 @@ async function execUserFuncCall(stmt, env) {
         }
         return (mouseX >= left && mouseX < right && mouseY >= top && mouseY < bottom) ? -1 : 0;
       }
-      case 'countresources': case 'count1resources': return 0;
+      case 'countresources': case 'count1resources': {
+        const typeArg = stmt.args?.[0];
+        const typeStr = typeArg?.type === 'namedConst' ? typeArg.name : null;
+        if (!typeStr) return 0;
+        return (macResources[typeStr] ?? []).length;
+      }
       case 'getctitle': return '';
       case 'button': { const bid = Math.floor(Number(await A(0)??0)); return controlStore[bid]?.value ?? 0; }
       case 'button&': { const bid = Math.floor(Number(await A(0)??0)); return controlStore[bid] ? bid : 0; }
@@ -3123,8 +3257,32 @@ async function evalCallable(node, env) {
     case 'sizeresource': return 0;
     case 'finderinfo': return 0;   // FN FINDERINFO(...) — no document from Finder
     case 'gestalt': return 0;      // FN GESTALT(...) stub
-    case 'countresources': case 'count1resources': return 0;
-    case 'getindresource': case 'get1indresource': case 'getindtype': return 0;
+    case 'countresources': case 'count1resources': {
+      const typeArg = rawArgs[0];
+      const typeStr = typeArg?.type === 'namedConst' ? typeArg.name : null;
+      if (!typeStr) return 0;
+      return (macResources[typeStr] ?? []).length;
+    }
+    case 'getindresource': case 'get1indresource': case 'getindtype': {
+      const typeArg = rawArgs[0];
+      const typeStr = typeArg?.type === 'namedConst' ? typeArg.name : null;
+      if (!typeStr) return 0;
+      const idx = Math.floor(Number(await N(1))) - 1;
+      const resources = macResources[typeStr] ?? [];
+      if (idx < 0 || idx >= resources.length) return 0;
+      const res = resources[idx];
+      const dataAddr = fakeMalloc(res.data.length);
+      fakeWriteBytes(dataAddr, res.data);
+      const handle = fakeMalloc(4);
+      fakeWriteU32(handle, dataAddr);
+      return handle;
+    }
+    case 'pstr$': {
+      const addr = Math.floor(Number(await A(0)) ?? 0);
+      if (!addr) return '';
+      const len = fakeReadBytes(addr, 1)[0];
+      return macRomanToStr(fakeReadBytes(addr + 1, len));
+    }
     case 'curresfile': return 0;
     case 'countmitems': {
       const handle = Math.floor(Number(await N(0))) || 0;
