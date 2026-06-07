@@ -210,7 +210,7 @@ body {
 <body>
 
 <div id="toolbar">
-  <button class="tb-btn" id="btn-open" onclick="openFile()">Open</button>
+  <button class="tb-btn" id="btn-open" onclick="openFile()">Open Folder</button>
   <select id="file-select" disabled onchange="selectFile(this.value)">
     <option value="">— no file loaded —</option>
   </select>
@@ -224,7 +224,7 @@ body {
 </div>
 
 
-<input type="file" id="file-input" style="display:none" multiple accept=".txt,.bas,.incl,.fltr,.main,.rsrc">
+<input type="file" id="file-input" style="display:none" webkitdirectory multiple>
 
 <script src="zbasic-parser.js"></script>
 <script>
@@ -472,7 +472,15 @@ function resizeCanvas(w, h) {
 
 // ── File loading ──────────────────────────────────────────────
 document.getElementById('file-input').addEventListener('change', function(e) {
+  // When using webkitdirectory, file.name is just the filename (not the path).
+  // We load every file from the chosen folder into the files{} store.
   const flist = Array.from(e.target.files);
+  if (flist.length === 0) return;
+
+  // Reset store so re-opening a folder starts fresh.
+  Object.keys(files).forEach(k => delete files[k]);
+  loadedFiles.length = 0;
+
   let pending = flist.length;
   flist.forEach(file => {
     const reader = new FileReader();
@@ -556,8 +564,10 @@ function updateFileSelect() {
 
 function autoSelectFile() {
   if (loadedFiles.length === 0) return;
-  const main = loadedFiles.find(n => n.toUpperCase().endsWith('.MAIN'));
-  const name = main ?? (loadedFiles.length === 1 ? loadedFiles[0] : null);
+  const mains = loadedFiles.filter(n => n.toUpperCase().endsWith('.MAIN'));
+  const txts  = loadedFiles.filter(n => n.toLowerCase().endsWith('.txt'));
+  // Prefer .MAIN; if none, use the sole .txt; if still none, give up.
+  const name = mains[0] ?? (txts.length === 1 ? txts[0] : null);
   if (name) { document.getElementById('file-select').value = name; selectFile(name); }
 }
 
@@ -712,6 +722,7 @@ let funcDefs = {};
 const debugMode = false;
 const fnPtrTable = {};  // handle → function name, for @ operator
 let nextFnPtrHandle = 1;
+const executedGlobals = new Set(); // tracks which GLBL files have already been executed
 
 // ── Mac controls (BUTTON / SCROLL BUTTON / EDIT FIELD) ────────
 const controlStore = {};
@@ -777,10 +788,10 @@ function stmtSummary(stmt) {
 let penX = 0, penY = 0, penWidth = 1, penHeight = 1;
 let gfxPenX = 0, gfxPenY = 0;  // pen position after last text draw (for GETPEN)
 let gfxPenMode = 8;   // 8=patCopy (normal), 10=patXor (rubber-band XOR)
-let xorSnapshot = null; // ImageData snapshot for XOR rubber-band restore
 let currentFg = '#000000', currentBg = '#ffffff';
 const spriteBuffer = {};
 let textSize = 12, textX = 1, textY = 12;
+let textTransferMode = 0;  // 0=srcCopy, 2=srcXor (from TEXT font,size,style,mode)
 let yieldCounter = 0;
 
 let onMenuHandler = null;
@@ -846,53 +857,71 @@ async function maybeYield() {
   }
 }
 
+let firingEvents = false;
 async function fireEventHandlers() {
-  while (eventQueue.length > 0) {
-    const evt = eventQueue[0];
-    let lbl = null, evtCode = 0;
-    if (evt.type === 'menu' && onMenuHandler) {
-      eventQueue.shift();
-      lastMenu = evt.menu; lastItem = evt.item;
-      lbl = onMenuHandler;
-      evtCode = 5; // Mac menuEvt code
-    } else if (evt.type === 'mouse' && onMouseHandler) {
-      eventQueue.shift();
-      lbl = onMouseHandler;
-      evtCode = 1; // Mac mouseDown code
-    } else if (evt.type === 'timer' && onTimerHandler) {
-      eventQueue.shift();
-      lbl = onTimerHandler;
-    } else if ((evt.type === 'button' || evt.type === 'editfield') && onDialogHandler) {
-      eventQueue.shift();
-      evtCode = evt.code ?? (evt.type === 'button' ? 1 : 2);
-      lastDialogId = evt.id ?? lastDialogId;
-      evt.ref = lastDialogId;
-      lbl = onDialogHandler;
-    } else if (onDialogHandler) {
-      eventQueue.shift();
-      evtCode = evt.code ?? 0;
-      lbl = onDialogHandler;
-    } else {
-      break;
+  // Only process events that were in the queue at the start of this call.
+  // New events added by setInterval or by event handlers themselves are left
+  // for the next fireEventHandlers() call so this function always terminates.
+  // Re-entrancy guard: if already inside an event handler, skip to avoid deep stacks.
+  if (firingEvents) return;
+  const limit = eventQueue.length;
+  if (limit === 0) return;
+  firingEvents = true;
+  try {
+    let processed = 0;
+    while (processed < limit && eventQueue.length > 0) {
+      processed++;
+      const evt = eventQueue[0];
+      let lbl = null, evtCode = 0;
+      if (evt.type === 'menu' && onMenuHandler) {
+        eventQueue.shift();
+        lastMenu = evt.menu; lastItem = evt.item;
+        lbl = onMenuHandler;
+        evtCode = 5; // Mac menuEvt code
+      } else if (evt.type === 'mouse' && onMouseHandler) {
+        eventQueue.shift();
+        lbl = onMouseHandler;
+        evtCode = 1; // Mac mouseDown code
+      } else if (evt.type === 'timer' && onTimerHandler) {
+        eventQueue.shift();
+        lbl = onTimerHandler;
+      } else if ((evt.type === 'button' || evt.type === 'editfield') && onDialogHandler) {
+        eventQueue.shift();
+        evtCode = evt.code ?? (evt.type === 'button' ? 1 : 2);
+        lastDialogId = evt.id ?? lastDialogId;
+        evt.ref = lastDialogId;
+        lbl = onDialogHandler;
+      } else if (onDialogHandler) {
+        eventQueue.shift();
+        evtCode = evt.code ?? 0;
+        lbl = onDialogHandler;
+      } else {
+        break;
+      }
+      handlerDepth++;
+      const prevCode = currentDialogEventCode;
+      const prevEvt = currentDialogEvent;
+      currentDialogEventCode = evtCode;
+      currentDialogEvent = evt;
+      try { await callEventHandler(lbl); }
+      finally { handlerDepth--; currentDialogEventCode = prevCode; currentDialogEvent = prevEvt; }
     }
-    handlerDepth++;
-    const prevCode = currentDialogEventCode;
-    const prevEvt = currentDialogEvent;
-    currentDialogEventCode = evtCode;
-    currentDialogEvent = evt;
-    try { await callEventHandler(lbl); }
-    finally { handlerDepth--; currentDialogEventCode = prevCode; currentDialogEvent = prevEvt; }
+  } finally {
+    firingEvents = false;
   }
 }
 
+let _callHandlerCount = 0;
 async function callEventHandler(lbl) {
+  _callHandlerCount++;
+  if (_callHandlerCount <= 20) console.log(`[callEH #${_callHandlerCount}] → "${lbl}"`);
   const stmts = currentProgram;
   const idx = stmts.findIndex(s => s && s.type === 'label' && s.label.toLowerCase() === lbl);
-  if (idx < 0) { if (debugMode) console.log(`▶ GOSUB [${lbl}] — label not found`); return; }
+  if (idx < 0) { console.log(`  label not found: "${lbl}"`); return; }
   if (debugMode) console.log(`▶ GOSUB → [${lbl}:]`);
   let i = idx + 1;
   while (i < stmts.length) {
-    if (stopRequested) throw new Error('USER_STOP');
+    await maybeYield();
     const s = stmts[i];
     if (!s) { i++; continue; }
     try {
@@ -901,7 +930,9 @@ async function callEventHandler(lbl) {
     } catch(e) {
       if (e instanceof ReturnSignal) return;
       if (e instanceof GotoSignal) {
-        const li = stmts.findIndex(x => x && x.type === 'label' && x.label.toLowerCase() === e.label);
+        // Forward-first: same fix as gosub_inner — handles multiple @Header.INCL inclusions
+        const fwd = stmts.slice(i + 1).findIndex(x => x && x.type === 'label' && x.label.toLowerCase() === e.label);
+        const li = fwd >= 0 ? i + 1 + fwd : stmts.findIndex(x => x && x.type === 'label' && x.label.toLowerCase() === e.label);
         if (li >= 0) { i = li + 1; continue; }
         throw e;
       }
@@ -927,6 +958,7 @@ function labelOf(node) {
 function toggleRun() { if (running) stopProgram(); else runProgram(); }
 
 async function runProgram() {
+  console.log('=== runProgram called, currentProgram length:', currentProgram?.length ?? 'null');
   if (!currentProgram || running) return;
   running = true; stopRequested = false;
   const btnRun = document.getElementById('btn-run');
@@ -934,6 +966,7 @@ async function runProgram() {
 
   globalVars = {}; dataStore = []; dataPtr = 0; funcDefs = {};
   Object.keys(fnPtrTable).forEach(k => delete fnPtrTable[k]); nextFnPtrHandle = 1;
+  executedGlobals.clear();
   destroyAllCtrls();
   onMenuHandler = null; onDialogHandler = null; onMouseHandler = null;
   onTimerHandler = null; onEventHandler = null; onStopHandler = null;
@@ -943,6 +976,11 @@ async function runProgram() {
   nextRegionHandle = 1000; clipStack = [];
   Object.keys(teHandleMap).forEach(k => delete teHandleMap[k]);
   fakeMemBlocks.length = 0; nextFakeAddr = 0x10000;
+  // Mac OS low-memory globals block (addresses 0x0000–0x0FFF).
+  // {expr} reads a word from the address given by expr; these are the canonical values.
+  const _macLow = new Uint8Array(0x1000);
+  fakeMemBlocks.push({base: 0, data: _macLow});
+  _macLow[0x14] = 0; _macLow[0x15] = 20;  // 0x0014 MBarHeight = 20
   clearEvents();
   Object.keys(menuDefs).forEach(k => delete menuDefs[k]);
   renderMenuBar();
@@ -952,8 +990,8 @@ async function runProgram() {
   renderTabs();
   currentFg = '#000000'; currentBg = '#ffffff';
   penX = 0; penY = 0; penWidth = 1; penHeight = 1;
-  gfxPenMode = 8; xorSnapshot = null;
-  textX = 1; textY = textSize; yieldCounter = 0;
+  gfxPenMode = 8;
+  textX = 1; textY = textSize; textTransferMode = 0; yieldCounter = 0;
   mouseDown = false; mouseX = 0; mouseY = 0; mousePrevDown = false; mouseLastPressTime = 0;
 
   // Reset per-run state
@@ -1015,6 +1053,9 @@ async function runProgram() {
     '_resource%': 0x20, '_respurgeable%': 0x40,
     // Misc Mac
     '_graphicobj': 0,
+    // ZBasic _aplIncl framework constants (not present in any source file — compiled binary)
+    '_updatevt': 1,   // SCROLL BUTTON direction: 1=vertical
+    '_efclass': 0,    // edit-field window class (used in PG PRO object system)
   });
 
   collectPass(currentProgram, funcDefs, dataStore);
@@ -1083,8 +1124,9 @@ async function execBlock(stmts, env) {
       if (e instanceof GosubSignal) {
         const idx = stmts.findIndex(s => s && s.type === 'label' && s.label.toLowerCase() === e.label);
         if (idx >= 0) {
-          if (debugMode) console.log(`▶ GOSUB → [${e.label}:]`);
+          console.log(`[execBlock GOSUB] → "${e.label}" at idx=${idx}`);
           let j = idx + 1;
+          let _gotoCount = 0;
           gosub_inner: while (j < stmts.length) {
             await maybeYield();
             const s2 = stmts[j];
@@ -1093,15 +1135,25 @@ async function execBlock(stmts, env) {
               const r2 = await execStmt(s2, env);
               if (r2 instanceof ReturnSignal) break;
             } catch(e2) {
-              if (e2 instanceof ReturnSignal) break;
+              if (e2 instanceof ReturnSignal) { console.log(`[gosub_inner] RETURN at j=${j}`); break; }
               if (e2 instanceof GotoSignal) {
-                const li = stmts.findIndex(s => s && s.type === 'label' && s.label.toLowerCase() === e2.label);
-                if (li >= 0) { if (debugMode) console.log(`▶ GOTO [${e2.label}:]`); j = li + 1; continue gosub_inner; }
+                // Search forward from j first: handles multiple inclusions of the same file
+                // (e.g. @Header.INCL included by both PG PRO.INCL and PICT.FLTR defines
+                // "After @Header" twice; the GOTO inside PICT.FLTR's copy must land on
+                // PICT.FLTR's own label, not the earlier one from PG PRO.INCL).
+                const fwd = stmts.slice(j + 1).findIndex(s => s && s.type === 'label' && s.label.toLowerCase() === e2.label);
+                const li = fwd >= 0 ? j + 1 + fwd : stmts.findIndex(s => s && s.type === 'label' && s.label.toLowerCase() === e2.label);
+                if (li >= 0) {
+                  _gotoCount++;
+                  if (_gotoCount <= 60 || _gotoCount % 200 === 0) console.log(`[gosub_inner GOTO #${_gotoCount}] "${e2.label}" idx=${li}, from j=${j}`);
+                  if (_gotoCount === 61) console.log('[gosub_inner] suppressing further GOTO logs (every 200th shown)');
+                  j = li + 1; continue gosub_inner;
+                }
                 throw e2;
               }
               if (e2 instanceof GosubSignal) {
                 const ni = currentProgram.findIndex(s => s && s.type === 'label' && s.label.toLowerCase() === e2.label);
-                if (ni >= 0) { await callEventHandler(e2.label); j++; continue gosub_inner; }
+                if (ni >= 0) { console.log(`[gosub_inner nested GOSUB] "${e2.label}" ni=${ni}`); await callEventHandler(e2.label); j++; continue gosub_inner; }
                 throw e2;
               }
               throw e2;
@@ -1163,6 +1215,7 @@ async function execStmt(stmt, env) {
     case 'def': case 'defCmd': return;  // compiler directives — ignored at runtime
     case 'label': case 'data': case 'comment': case 'remark': return;  // not executable
     case 'endGlobals': case 'includeFile': return;  // PG:PRO framework directives — no-op
+    case 'dimRecord': case 'dimEndRecord': return;  // RECORD type declarations — no-op at runtime
     default: console.log(`unsupported stmt: ${stmt.type}`); return;
   }
 }
@@ -1171,7 +1224,8 @@ async function execStmt(stmt, env) {
 // ZBasic type suffixes %&!# are just type hints — strip them for storage lookup.
 // ($ stays because string variables are distinct from numeric variables.)
 function normVarName(name) {
-  return (name && /[%&!#]$/.test(name)) ? name.slice(0, -1) : name;
+  const s = (name && /[%&!#]$/.test(name)) ? name.slice(0, -1) : name;
+  return s ? s.toLowerCase() : s;
 }
 
 function readVar(env, name) {
@@ -1199,8 +1253,8 @@ async function execAssign(stmt, env) {
   const val = await evalExpr(stmt.value, env);
   const name = stmt.name;
   if (stmt.fields && stmt.fields.length > 0 && stmt.idx) {
-    // Struct array: gShopper.SLoc.v%(0) = x → flat array 'gshopper.sloc.v%'[0] = x
-    const flatName = (name + '.' + stmt.fields.join('.')).toLowerCase();
+    // Struct array: gShopper.SLoc.v%(0) = x → flat array 'gshopper.sloc.v'[0] = x
+    const flatName = (normVarName(name) + '.' + stmt.fields.map(normVarName).join('.')).toLowerCase();
     const idxs = await Promise.all(stmt.idx.map(x => evalExpr(x, env)));
     const idx = idxs[0] ?? 0;
     let arr = env[flatName] ?? globalVars[flatName];
@@ -1273,10 +1327,18 @@ async function execPrint(stmt, env) {
 }
 
 function gfxText(txt, x, y) {
-  ctx.fillStyle = currentFg;
+  if (!ctx) return;
   ctx.font = `${textSize}px monospace`;
+  const tw = ctx.measureText(txt).width;
+  if (textTransferMode === 2) {
+    // srcXor: erase old content in text bounding box before drawing.
+    // This replicates the Mac XOR text trick on a white background.
+    ctx.fillStyle = currentBg;
+    ctx.fillRect(x, y - textSize, tw + 2, textSize + 2);
+  }
+  ctx.fillStyle = currentFg;
   ctx.fillText(txt, x, y);
-  gfxPenX = x + ctx.measureText(txt).width;
+  gfxPenX = x + tw;
   gfxPenY = y;
 }
 
@@ -1295,7 +1357,8 @@ async function execSysCall(stmt, env) {
     case 'CLS': case 'HOME': {
       if (!ctx) { getOrCreateWindow(1, null, 512, 342); setOutputWindow(1); }
       showCanvas();
-      ctx.fillStyle = currentBg; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      const wdef = windowDefs[outputWindowId ?? frontWindowId ?? 1];
+      ctx.fillStyle = currentBg; ctx.fillRect(0, 0, wdef?.logW ?? 512, wdef?.logH ?? 342);
       textX = 1; textY = textSize; return;
     }
 
@@ -1312,19 +1375,8 @@ async function execSysCall(stmt, env) {
       const v = await n(0);
       if (v !== 0) { penWidth = v; penHeight = v; }
       if (args.length >= 2) { const h = await n(1); if (h !== 0) penHeight = h; }
-      if (args.length >= 4) {
-        const mode = Math.round(await n(3));
-        if (mode === 10 && gfxPenMode !== 10) {
-          // Entering XOR mode: take clean-canvas snapshot
-          gfxPenMode = 10;
-          if (!xorSnapshot) xorSnapshot = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        } else if (mode !== 10 && gfxPenMode === 10) {
-          // Leaving XOR mode: restore snapshot (erase rubber-band line)
-          gfxPenMode = mode;
-          if (xorSnapshot) { ctx.putImageData(xorSnapshot, 0, 0); xorSnapshot = null; }
-        } else {
-          gfxPenMode = mode;
-        }
+      if (args.length >= 4 && args[3] !== null) {
+        gfxPenMode = Math.round(await n(3));
       }
       if (args.length >= 5 && args[4] !== null) {
         // Mac pen patterns: 0=default(black), 1=ltGray, 2=gray, 3=dkGray, 4=black, 5=lightGray
@@ -1409,6 +1461,7 @@ async function execSysCall(stmt, env) {
       } else {
         // TEXT font, size [, style [, mode]] — set font attributes
         if (args[1]) textSize = Math.max(1, await n(1));
+        if (args[3]) textTransferMode = Math.floor(await n(3));
       }
       return;
     }
@@ -1698,7 +1751,7 @@ async function execSysCall(stmt, env) {
         writeVar(env, a0.name, (Number(readVar(env, a0.name))||0) + delta);
       } else if (a0.type === 'chainAccess' && a0.args !== null) {
         // INC(gShopper.STargetLine%(i)) — flat array increment
-        const flatName = (a0.name + '.' + a0.fields.join('.')).toLowerCase();
+        const flatName = (normVarName(a0.name) + '.' + a0.fields.map(normVarName).join('.')).toLowerCase();
         const idx = Math.floor(Number(await evalExpr(a0.args?.[0], env) ?? 0));
         let arr = env[flatName] ?? globalVars[flatName];
         if (!Array.isArray(arr)) { arr = []; globalVars[flatName] = arr; }
@@ -1854,19 +1907,23 @@ async function execSysCall(stmt, env) {
 
     case 'GLOBALS': {
       // GLOBALS GOSUB label / GLOBALS GOTO label — call subroutine in global context
-      if (stmt.keyword === 'GOSUB' && args[0]) throw new GosubSignal(labelOf(args[0]));
+      if (stmt.keyword === 'GOSUB' && args[0]) { console.log(`[GLOBALS GOSUB] → ${labelOf(args[0])}`); throw new GosubSignal(labelOf(args[0])); }
       if (stmt.keyword === 'GOTO'  && args[0]) throw new GotoSignal(labelOf(args[0]));
       // GLOBALS "filename" — execute the GLBL file's DIM/equate statements
       if (args[0]?.type === 'literal' && typeof args[0].value === 'string') {
         const glblName = args[0].value;
-        if (files[glblName]) {
+        if (executedGlobals.has(glblName)) { /* already handled — skip silently */ }
+        else if (!files[glblName]) {
+          executedGlobals.add(glblName); // mark so we don't warn again on every event pass
+          console.warn(`GLOBALS "${glblName}": file not loaded — upload it to define its constants`);
+        } else {
+          executedGlobals.add(glblName);
           try {
             const glblStmts = flattenIncludes(parser.parse(files[glblName], {parseFile: () => []}));
             await execBlock(glblStmts, globalVars);
+            console.log(`GLOBALS "${glblName}" done`);
           } catch(e) {
-            if (!(e instanceof GotoSignal) && !(e instanceof GosubSignal) && !(e instanceof ReturnSignal)) {
-              console.warn(`GLOBALS "${glblName}" exec error: ${e.message ?? e}`);
-            }
+            console.warn(`GLOBALS "${glblName}" exec error: ${e.message ?? e}`, e);
           }
         }
       }
@@ -2082,15 +2139,24 @@ async function execFor(stmt, env) {
 }
 
 async function execWhile(stmt, env) {
+  let iters = 0;
   while (isTruthy(await evalExpr(stmt.condition, env))) {
+    iters++;
+    if (iters === 10000) {
+      const condStr = JSON.stringify(stmt.condition).slice(0, 120);
+      console.warn(`[while] stuck at 10000 iters, cond=${condStr}`);
+    }
     await maybeYield();
     const r = await execBlock(stmt.body, env);
     if (r instanceof ReturnSignal) return r;
   }
 }
 
+let _doLoopCount = 0;
 async function execDoWhile(stmt, env) {
   do {
+    _doLoopCount++;
+    if (_doLoopCount <= 3 || _doLoopCount % 100 === 0) console.log(`[DO loop] iteration ${_doLoopCount}, qLen=${eventQueue.length}, onDialog=${onDialogHandler}`);
     await maybeYield();
     const r = await execBlock(stmt.body, env);
     if (r instanceof ReturnSignal) return r;
@@ -2470,10 +2536,6 @@ async function execProcCall(stmt, env) {
     case 'moveto': case 'move': {
       penX = Number(await ev(0)) || 0;
       penY = Number(await ev(1)) || 0;
-      if (gfxPenMode === 10 && xorSnapshot) {
-        // Restore clean-canvas snapshot to erase any previous rubber-band line
-        ctx.putImageData(xorSnapshot, 0, 0);
-      }
       return;
     }
     case 'lineto': case 'line': {
@@ -2484,16 +2546,7 @@ async function execProcCall(stmt, env) {
       return;
     }
     case 'penmode': {
-      const mode = Math.round(Number(await ev(0)) || 0);
-      if (mode === 10 && gfxPenMode !== 10) {
-        gfxPenMode = 10;
-        if (!xorSnapshot) xorSnapshot = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      } else if (mode !== 10 && gfxPenMode === 10) {
-        gfxPenMode = mode;
-        if (xorSnapshot) { ctx.putImageData(xorSnapshot, 0, 0); xorSnapshot = null; }
-      } else {
-        gfxPenMode = mode;
-      }
+      gfxPenMode = Math.round(Number(await ev(0)) || 0);
       return;
     }
     case 'pensize': {
@@ -2559,6 +2612,7 @@ async function execProcCall(stmt, env) {
       return;
     }
     case 'blockmove': return;  // memory copy stub
+    case 'localtoglobal': case 'globaltolcal': return;  // coordinate conversion no-op
     case 'offsetrect': {
       // Standalone CALL OFFSETRECT(T, dh, dv) on scalar T — try DIM'd consecutive vars
       // (can't implement properly without memory layout — just no-op)
@@ -2578,6 +2632,24 @@ async function execProcCall(stmt, env) {
 let savedMenuBar = null;
 
 async function execUserFuncCall(stmt, env) {
+  // Fast-path: system functions that ZBasic parses as user FN calls
+  switch (stmt.name.toLowerCase()) {
+    case 'tickcount': return Math.floor(Date.now() / 17);
+  }
+  // Intercept pGbuild — the actual LOCAL FN body never pushes a window-update
+  // event (it relies on Mac OS event machinery). We create the window and push
+  // a dialog event (code 5 = WUpd) so DIALOG ON fires "PG:WUpd" → RefreshMain.
+  if (stmt.name.replace(/\s+/g,'').toLowerCase() === 'pgbuild') {
+    let wndNum = Math.floor(Number(await evalExpr(stmt.args?.[0], env) ?? 1));
+    if (wndNum < 0) wndNum = -wndNum;
+    if (wndNum < 1) wndNum = 1;
+    console.log(`[pGbuild] wndNum=${wndNum}`);
+    getOrCreateWindow(wndNum, null, 512, 342);
+    setOutputWindow(wndNum);
+    bringToFront(wndNum);
+    eventQueue.push({type:'dialog', code:5, winRef:wndNum});
+    return null;
+  }
   const fn = funcDefs[stmt.name];
   if (!fn) {
     // Built-in Toolbox FN calls
@@ -2613,7 +2685,10 @@ async function execUserFuncCall(stmt, env) {
         if (!isPict) return 0;
         const pictId = Math.floor(Number(await ev(1)) ?? 0);
         // Dimensions for known PICT IDs in the Supermarket app
-        const pictDims = {4000:[280,500,'#888888'], 5000:[30,50,'#c8a060'], 5001:[20,8,'#00aa00'], 5004:[20,20,'#0066cc']};
+        // Sprites (5001=shopper, 5004=well) must be black so PUT XOR works:
+        // black XOR white=black (draw), black XOR black=white (erase).
+        // Backgrounds/structure PICTs use grey tones for visual clarity.
+        const pictDims = {4000:[280,500,'#888888'], 5000:[30,50,'#c8a060'], 5001:[20,8,'#000000'], 5004:[20,20,'#000000']};
         const [ph, pw, color] = pictDims[pictId] ?? [20, 20, '#aaaaaa'];
         // PICT data: 2-byte picSize + 8-byte picFrame (top,left,bottom,right as int16 big-endian)
         const dataAddr = fakeMalloc(10);
@@ -2708,7 +2783,7 @@ async function execUserFuncCall(stmt, env) {
     if (!targetName || !funcDefs[targetName]) return null;
     return execUserFuncCall({...stmt, name: targetName}, env);
   }
-  if (debugMode) console.log(`▶ FN ${stmt.name}`);
+  if (debugMode || ['refreshmain','initialize'].includes(stmt.name)) console.log(`▶ FN ${stmt.name}`, stmt.name === 'refreshmain' ? {gNbrCheckouts: globalVars['gnbrcheckouts'], gNbrAisles: globalVars['gnbraisles'], gMoving: globalVars['gmoving']} : '');
   const local = Object.create(env);
   if (fn.args) for (let i = 0; i < fn.args.length; i++)
     local[fn.args[i].name] = await evalExpr(stmt.args?.[i], env);
@@ -2725,18 +2800,20 @@ async function evalExpr(node, env) {
     case 'literal':     return node.value;
     case 'variable': {
       const rv = readVar(env, node.name);
-      return rv !== undefined ? rv : 0;
+      if (rv !== undefined) return rv;
+      if (node.name.startsWith('_')) console.warn(`Undefined constant: ${node.name}`);
+      return 0;
     }
     case 'chainAccess': {
       if (node.args !== null) {
-        // Struct array: gShopper.SLoc.v%(0) → flat array key = 'gshopper.sloc.v%'
-        const flatName = (node.name + '.' + node.fields.join('.')).toLowerCase();
+        // Struct array: gShopper.SLoc.v%(0) → flat array key = 'gshopper.sloc.v'
+        const flatName = (normVarName(node.name) + '.' + node.fields.map(normVarName).join('.')).toLowerCase();
         const idx = Math.floor(Number(await evalExpr(node.args?.[0], env) ?? 0));
         const arr = env[flatName] ?? globalVars[flatName];
         return (Array.isArray(arr) ? arr[idx] : null) ?? 0;
       }
       let v = env[node.name] ?? globalVars[node.name] ?? {};
-      for (const f of node.fields) v = (v && typeof v === 'object') ? v[f] : null;
+      for (const f of node.fields) v = (v && typeof v === 'object') ? (v[normVarName(f)] ?? v[f]) : null;
       return v ?? 0;
     }
     case 'binary':      return evalBinary(node, env);
@@ -2746,7 +2823,7 @@ async function evalExpr(node, env) {
     case 'namedConst':  return 0;
     case 'lineRef':     return node.label;
     case 'deref': { const addr = Math.floor(Number(await evalExpr(node.expr, env))); return fakeReadU32(addr); }
-    case 'compileConst': return evalExpr(node.expr, env);
+    case 'compileConst': { const addr = Math.floor(Number(await evalExpr(node.expr, env))); return fakeReadU16(addr); }
     default: return 0;
   }
 }
@@ -3060,6 +3137,8 @@ async function evalCallable(node, env) {
     case 'getcrefcon': return 0;
     case 'alert': case 'notealert': case 'caution': case 'stop':
       return 1;  // alert dialogs always return OK (1)
+
+    case 'tickcount': return Math.floor(Date.now() / 17);  // Mac ticks (1/60 s each)
 
     default: {
       // User function?
