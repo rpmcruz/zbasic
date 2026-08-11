@@ -1,0 +1,65 @@
+[
+  {
+    "name": "CDraw",
+    "dir": "progs/extracted/CDraw",
+    "main": "CDraw45.txt",
+    "files": [
+      "CDraw45.exe.rsrc",
+      "CDraw45.txt",
+      "CurveDraw Help",
+      "CurveDraw45.bas"
+    ]
+  },
+  {
+    "name": "Grglflx",
+    "dir": "progs/extracted/Grglflx",
+    "main": "grglflx27.txt",
+    "files": [
+      "grglflx notes",
+      "grglflx27.exe.rsrc",
+      "grglflx27.txt",
+      "grglflx28.bas"
+    ]
+  },
+  {
+    "name": "MacPThy",
+    "dir": "progs/extracted/MacPThy",
+    "main": "PThy 1.1.txt",
+    "files": [
+      "PThy 1.1",
+      "PThy 1.1.txt",
+      "Price Theory 1.1.rsrc"
+    ]
+  },
+  {
+    "name": "Supermarket",
+    "dir": "progs/extracted/Supermarket",
+    "main": "Supermarket.MAIN",
+    "files": [
+      "Supermarket",
+      "Supermarket. Folder 1_30_94/@Header.INCL",
+      "Supermarket. Folder 1_30_94/@Header.INCL.rsrc",
+      "Supermarket. Folder 1_30_94/Cancel.FLTR",
+      "Supermarket. Folder 1_30_94/Cancel.FLTR.rsrc",
+      "Supermarket. Folder 1_30_94/Edit Menu.FLTR",
+      "Supermarket. Folder 1_30_94/Edit Menu.FLTR.rsrc",
+      "Supermarket. Folder 1_30_94/Font.FLTR",
+      "Supermarket. Folder 1_30_94/Font.FLTR.rsrc",
+      "Supermarket. Folder 1_30_94/PG PRO.GLBL",
+      "Supermarket. Folder 1_30_94/PG PRO.INCL",
+      "Supermarket. Folder 1_30_94/PG PRO.INCL.rsrc",
+      "Supermarket. Folder 1_30_94/PICT.FLTR",
+      "Supermarket. Folder 1_30_94/PICT.FLTR.rsrc",
+      "Supermarket. Folder 1_30_94/Return.FLTR",
+      "Supermarket. Folder 1_30_94/Return.FLTR.rsrc",
+      "Supermarket. Folder 1_30_94/Supermarket.GLBL",
+      "Supermarket. Folder 1_30_94/Supermarket.INCL",
+      "Supermarket. Folder 1_30_94/Supermarket.INCL.rsrc",
+      "Supermarket. Folder 1_30_94/Supermarket.MAIN",
+      "Supermarket. Folder 1_30_94/Supermarket.RSRC",
+      "Supermarket. Folder 1_30_94/Supermarket.RSRC.rsrc",
+      "Supermarket. Folder 1_30_94/Supermkt.DPt",
+      "Supermarket.exe.rsrc"
+    ]
+  }
+]
