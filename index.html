@@ -12,7 +12,10 @@ body {
   font-size: 12px;
   display: flex;
   flex-direction: column;
+  /* dvh tracks the visible area as a phone's URL bar retracts; vh is what it
+     would be with the bar hidden, which cuts the bottom off the canvas. */
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
   color: #ccc;
 }
@@ -21,6 +24,10 @@ body {
 #toolbar {
   display: flex;
   align-items: center;
+  /* Wraps rather than overflowing: the page cannot scroll (body is
+     overflow:hidden), so on a phone-width screen an unwrapped toolbar put the
+     Run button outside the viewport with no way to reach it. */
+  flex-wrap: wrap;
   gap: 8px;
   padding: 5px 10px;
   background: #222;
@@ -274,6 +281,16 @@ body {
 .mac-check:disabled .ind, .mac-radio:disabled .ind { border-color: #aaa; }
 .mac-check:disabled .ind::after, .mac-radio:disabled .ind::after { background: #aaa; color: #aaa; }
 .mac-btn .lbl { overflow: hidden; white-space: nowrap; }
+/* ── Narrow screens ───────────────────────────────────────── */
+/* Vertical space is scarce on a phone and width is what limits the window
+   scale, so give the chrome less of it and let the window sit at the top
+   instead of floating in the middle of the leftover grey. */
+@media (max-width: 700px) {
+  #toolbar { gap: 5px; padding: 4px 6px; }
+  .tb-btn { padding: 4px 10px; }
+  #prog-select, #file-select { max-width: 40vw; }
+  #canvas-wrapper { align-items: flex-start; }
+}
 .mac-editfield {
   background: white;
   border: 1px solid #888;
