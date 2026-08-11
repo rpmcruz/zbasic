@@ -2,7 +2,21 @@
 
 Interpreter for old ZBasic programs. ZBasic was a programming language from the 80s that was easy-to-use, cross-plataform, and had many GUI elements. The motivation for this interpreter was mainly to run [David D. Friedman's educational games](http://daviddfriedman.com/Living_Paper/living_paper.htm) to teach economics, which were probably the first educational games to be bundled together with a textbook.
 
-## How to run
+## Try it
+
+**<https://rpmcruz.github.io/zbasic/>** — pick one of the games from the
+dropdown on the left and press Run. Nothing is installed and nothing is
+uploaded; the interpreter and the programs are fetched as static files and run
+in your browser.
+
+| | |
+|---|---|
+| **Supermarket** | shoppers pick a checkout queue — watch how the search rule they use decides whether the lines balance |
+| **Price Theory** | draw budget lines and indifference curves; Control → BI Draw for the drawing tools |
+| **Curve Draw** | a function, its derivative and its average, drawn together |
+| **Grglflx** | guess where a wandering series goes next |
+
+## How to run it locally
 
 1. Compile the pegjs grammar. node.js is not needed to *run* the interpreter,
    only to build it: `npm install pegjs`, then `node zbasic-compile.js`. That
