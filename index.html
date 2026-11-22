@@ -2318,22 +2318,13 @@ function createButtonCtrl(id, {title = '', type = 1, state = 1, rect, wdef}) {
   el.disabled = (state === 0);
   if (state === 2) el.classList.add('selected');
   el.addEventListener('mousedown', e => e.stopPropagation());
-  el.addEventListener('click', e => {
-    const r = el.getBoundingClientRect();
-    const [mx, my] = canvasCoords(r.left + r.width / 2, r.top + r.height / 2);
-    // Report the press at the control's own position. On the Mac the click is
-    // a real mouse-down that MOUSE() sees wherever it lands, and the programs
-    // rely on that: MacPThy's tools read MOUSE(3)/MOUSE(4) after any click and
-    // reject it when it falls outside the drawing area, which a control's
-    // coordinates always do. But the program only gets to look once the button
-    // is up again — TrackControl holds on to the mouse until then — so the
-    // click is over (MOUSE(0) = 1), never a press still held: held, it was a
-    // drag toward the button, and DSM's price line, waiting for one after its
-    // "no" button, flew to the top of the graph.
-    // Its own click count: a button pressed just after a double click on the
-    // graph is not the third click of a triple.
-    notePress(mx, my, e.detail || 1);
-    noteRelease();
+  el.addEventListener('click', () => {
+    // A click on a control is the control's: TrackControl takes the mouse
+    // until the button is up and the program hears of it as a DIALOG event,
+    // not as a click MOUSE(0) reports. MacPThy is written for that — the
+    // MakeLine its "Linear" MC button leads to starts with `M=MOUSE(0)` and
+    // waits for a press on the axis unless that read finds a click — and a
+    // button click reported as a mouse click drew a line to the button.
     lastDialogId = id;
     pushEvent('button', {id, code: 1});
   });
@@ -6641,22 +6632,25 @@ async function evalCallable(node, env, fnCall = false) {
       const n_ = await N(0);
       if (n_ === 0) {
         //   0   button is up and has not been clicked since the last poll
-        //  ±1/±2/±3  single / double / triple click, negative while still held
+        //   1/2/3   single / double / triple click
+        //  -1       a single press, still held (a drag)
         if (mouseDown) {
-          // A held double or triple click is reported once; after that the
-          // press counts as over. On the Mac a held press kept answering -2, and
-          // MacPThy debounces after some double clicks (FN Debounce waits for
-          // MOUSE(0)=0) — but elsewhere it relied on the Mac being slow: by the
-          // time it next read the mouse the button was up. Here it reads it a
-          // few milliseconds later, while a person's finger is still down, and
-          // one double click counted twice: DSM's price double click also set
-          // the quantity and accepted it, and BI Draw drew each indifference
+          // A double or triple click is reported once, as a click that is
+          // over (+2/+3), even while the button is still down; then the press
+          // counts as finished. On the Mac the program was rarely back in time
+          // to see the second click held: it was busy drawing while a person
+          // double-clicked, and it got the finished click. MacPThy is written
+          // for that — Monopoly's quantity loop ends only on M=2 — and runs
+          // fine on it. Here the program reads the mouse milliseconds later,
+          // and seeing the second press held (and again and again) counted one
+          // double click two or three times: DSM's price double click also
+          // set and accepted the quantity, and BI Draw drew each indifference
           // curve twice, XORing it away. Drags start with a single press, so
           // -1 keeps being reported for as long as the button is held.
           if (mousePrevDown) return mouseClicks > 1 ? 0 : -mouseClicks;
           mousePrevDown = true;
           mouseClickLatch = false;   // consumed by the live press edge
-          return -mouseClicks;
+          return mouseClicks > 1 ? mouseClicks : -mouseClicks;
         }
         mousePrevDown = false;
         // A press that has already been released still has to be reported once.
