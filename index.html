@@ -190,6 +190,7 @@ body {
   overflow: hidden;
   background: #555;
 }
+#no-windows { max-width: 28em; padding: 16px; color: #ddd; font-size: 14px; line-height: 1.5; text-align: center; }
 .win-container {
   /* Width/height are set in px by layoutWindows(), which preserves the window's
      logical aspect ratio. Stretching to 100%/100% here would distort the canvas
@@ -1029,7 +1030,25 @@ function setOutputWindow(id) {
 // and release land on different elements is no click — so the close box, and
 // every tab, ignored a real mouse.
 let tabsSig = null;
+// A Mac program keeps running when its last window is closed — Supermarket
+// does — with only its menu bar left, which in a browser looks as if it had
+// hung. Say so, and how to end it.
+function showNoWindowsNote() {
+  const wrap = document.getElementById('canvas-wrapper');
+  let note = document.getElementById('no-windows');
+  const show = running && !Object.keys(windowDefs).length;
+  if (!show) { note?.remove(); return; }
+  if (!note) {
+    note = document.createElement('div');
+    note.id = 'no-windows';
+    note.textContent = 'The program has no windows open but is still running, as a Mac program would be. ' +
+                       'Use its File › Quit, or the Stop button, to end it.';
+    wrap.appendChild(note);
+  }
+}
+
 function renderTabs() {
+  showNoWindowsNote();
   const bar = document.getElementById('tab-bar');
   const ids = Object.keys(windowDefs).map(Number).sort((a, b) => a - b);
   const sig = ids.map(id => `${id}:${windowDefs[id].title}`).join('\n') + `\n${frontWindowId}`;
@@ -1056,11 +1075,16 @@ function renderTabs() {
     // The close box sits at the left, as in a Mac title bar — MacPThy's
     // instructions send the reader to "the little box at the top left-hand
     // corner of the window". DIALOG(D0) reports the window through `winRef`.
-    const x = document.createElement('span');
-    x.className = 'win-tab-close';
-    x.title = 'Close window';
-    x.onclick = (e) => { e.stopPropagation(); pushEvent('dialog', {code: 4, winRef: id}); };
-    t.appendChild(x);
+    // The main (lowest-numbered) window has none: closing it leaves a Mac
+    // program running with no window at all (Supermarket), which here looks
+    // broken; programs are ended with their own Quit, or Stop.
+    if (id !== ids[0]) {
+      const x = document.createElement('span');
+      x.className = 'win-tab-close';
+      x.title = 'Close window';
+      x.onclick = (e) => { e.stopPropagation(); pushEvent('dialog', {code: 4, winRef: id}); };
+      t.appendChild(x);
+    }
     t.appendChild(label);
     bar.appendChild(t);
   }
@@ -3317,6 +3341,11 @@ async function runProgram() {
 
   running = false; stopRequested = false;
   btnRun.textContent = 'Run'; btnRun.classList.remove('running');
+  // The menus belong to the run: left up, they could still be clicked and
+  // did nothing. The windows stay, showing how the program left them.
+  Object.keys(menuDefs).forEach(k => delete menuDefs[k]);
+  renderMenuBar();
+  showNoWindowsNote();
   finishRun();
 }
 
