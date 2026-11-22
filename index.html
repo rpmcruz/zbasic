@@ -466,7 +466,7 @@ const VAR_SIZE = {int: 2, long: 4, real: 8};
 
 function varKind(canon) {
   if (canon.endsWith('$')) return 'str';
-  const t = varTypes[canon];
+  const t = varTypes[canon] ?? suffixType(canon);
   return t === 'long' ? 'long' : (t === 'real' || t === 'mixed') ? 'real' : 'int';
 }
 
@@ -3657,7 +3657,19 @@ function makeLocalScope(fn) {
   return scope;
 }
 
+// A variable's suffix is part of its name: X!, X#, X& and X$ are four
+// variables. Only X% is the same as X, integer being ZBasic's default type
+// (reference, DEFINT: "F and F% are the same variable (F! is still single
+// prec.)"). MacPThy depends on it — `Rate!=.2:Rate=20` sets two rates, and
+// merged, its price and quantity lines flew off the graph at 100 times the speed.
 function normVarName(name) {
+  const s = (name && name.endsWith('%')) ? name.slice(0, -1) : name;
+  return s ? s.toLowerCase() : s;
+}
+// A record's fields are another matter: Supermarket declares
+// `gShopper.STargetLine%` and writes plain `gShopper.STargetLine`, so a field
+// is known by its name without any suffix.
+function normFieldName(name) {
   const s = (name && /[%&!#]$/.test(name)) ? name.slice(0, -1) : name;
   return s ? s.toLowerCase() : s;
 }
@@ -3667,9 +3679,8 @@ function normVarName(name) {
 // & = long integer (32 bit), ! / # = single/double precision, $ = string.
 // Manual, "Numeric Conversions": assigning a real to an integer variable
 // truncates the fractional part, and out-of-range results wrap silently.
-// normVarName() drops the suffix so that `gShopper.STargetLine%` and the
-// bare `gShopper.STargetLine` the source actually writes are one variable —
-// so the type has to be remembered here instead.
+// normVarName() drops a % suffix, and normFieldName() any suffix of a record
+// field, so the type has to be remembered here instead.
 const varTypes   = Object.create(null);   // canonical name → 'int' | 'long' | 'real'
 const recordDefs = Object.create(null);   // record name → dim-arg list
 
@@ -3688,8 +3699,13 @@ function noteType(canon, t) {
   else if (prev !== t && prev !== 'mixed') varTypes[canon] = 'mixed';
 }
 
+// A variable with no type suffix is an integer too: ZBasic's default type,
+// which none of these programs changes (no DEFSNG/DEFDBL). Holding fractions in
+// them broke programs written for integers — MacPThy's freehand curve tool skips
+// a point while `PtX=X!` has not moved a whole pixel, and with fractions every
+// pass of its loop used up one of the curve's 200 points.
 function coerceVar(canon, val) {
-  const t = varTypes[canon];
+  const t = varTypes[canon] ?? suffixType(canon) ?? (canon && !canon.endsWith('$') && !canon.startsWith('_') ? 'int' : null);
   if (t !== 'int' && t !== 'long') return val;
   if (typeof val !== 'number') return val;
   if (!Number.isFinite(val)) return 0;
@@ -3709,7 +3725,7 @@ const recordOf = Object.create(null);   // canonical instance name → record na
 
 function recordLeafPaths(recName, prefix = '', out = []) {
   for (const f of recordDefs[recName] ?? []) {
-    const fn = normVarName(f.name);
+    const fn = normFieldName(f.name);
     if (f.dotType === 'pt') out.push(prefix + fn + '.v', prefix + fn + '.h');
     else if (f.dotType && recordDefs[f.dotType]) recordLeafPaths(f.dotType, prefix + fn + '.', out);
     else out.push(prefix + fn);
@@ -3758,7 +3774,7 @@ function noteRecordFields(base, recName) {
   const fields = recordDefs[recName];
   if (!fields) return;
   for (const f of fields) {
-    const fname = normVarName(f.name);
+    const fname = normFieldName(f.name);
     if (f.dotType === 'pt') {
       noteType(`${base}.${fname}.v`, 'int');
       noteType(`${base}.${fname}.h`, 'int');
@@ -3905,7 +3921,7 @@ async function execAssign(stmt, env) {
   }
   if (stmt.fields && stmt.fields.length > 0 && stmt.idx) {
     // Struct array: gShopper.SLoc.v%(0) = x → flat array 'gshopper.sloc.v'[0] = x
-    const flatName = (normVarName(name) + '.' + stmt.fields.map(normVarName).join('.')).toLowerCase();
+    const flatName = (normVarName(name) + '.' + stmt.fields.map(normFieldName).join('.')).toLowerCase();
     const idxs = (await Promise.all(stmt.idx.map(x => evalExpr(x, env)))).map(subIdx);
     const idx = idxs[0] ?? 0;
     let arr = env[flatName] ?? globalVars[flatName];
@@ -4792,7 +4808,7 @@ async function execSysCall(stmt, env) {
         writeVar(env, a0.name, (Number(readVar(env, a0.name))||0) + delta);
       } else if (a0.type === 'chainAccess' && a0.args !== null) {
         // INC(gShopper.STargetLine%(i)) — flat array increment
-        const flatName = (normVarName(a0.name) + '.' + a0.fields.map(normVarName).join('.')).toLowerCase();
+        const flatName = (normVarName(a0.name) + '.' + a0.fields.map(normFieldName).join('.')).toLowerCase();
         const idx = Math.floor(Number(await evalExpr(a0.args?.[0], env) ?? 0));
         let arr = env[flatName] ?? globalVars[flatName];
         if (!Array.isArray(arr)) { arr = []; globalVars[flatName] = arr; }
@@ -6369,7 +6385,7 @@ async function evalExpr(node, env, lvlReal) {
     case 'chainAccess': {
       if (node.args !== null) {
         // Struct array: gShopper.SLoc.v%(0) → flat array key = 'gshopper.sloc.v'
-        const flatName = (normVarName(node.name) + '.' + node.fields.map(normVarName).join('.')).toLowerCase();
+        const flatName = (normVarName(node.name) + '.' + node.fields.map(normFieldName).join('.')).toLowerCase();
         const idx = subIdx(await evalExpr(node.args?.[0], env) ?? 0);
         const arr = env[flatName] ?? globalVars[flatName];
         return (Array.isArray(arr) ? arr[idx] : null) ?? 0;
@@ -6377,11 +6393,11 @@ async function evalExpr(node, env, lvlReal) {
       // gGhostShopper.SItems% — a field of a record-typed scalar, stored flat.
       const base = normVarName(node.name);
       if (recordOf[base]) {
-        const flat = base + '.' + node.fields.map(normVarName).join('.');
+        const flat = base + '.' + node.fields.map(normFieldName).join('.');
         if (flat in globalVars) return globalVars[flat] ?? 0;
       }
       let v = readVar(env, node.name) ?? {};
-      for (const f of node.fields) v = (v && typeof v === 'object') ? (v[normVarName(f)] ?? v[f]) : null;
+      for (const f of node.fields) v = (v && typeof v === 'object') ? (v[normFieldName(f)] ?? v[f]) : null;
       return v ?? 0;
     }
     case 'binary':      return evalBinary(node, env, lvlReal);
