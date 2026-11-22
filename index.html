@@ -367,7 +367,7 @@ body {
 
 <input type="file" id="file-input" style="display:none" webkitdirectory multiple>
 
-<script src="zbasic-compiled.js"></script>
+<script src="zbasic-compiled.js?v=45b7a43d37"></script>
 <script>
 const parser = ZBasicParser;
 // Device pixels per window pixel in every canvas. It follows the size the
@@ -1165,6 +1165,16 @@ function canvasCoords(clientX, clientY) {
     Math.round((clientX - r.left) * logW / r.width),
     Math.round((clientY - r.top)  * logH / r.height),
   ];
+}
+
+// The modifier keys, for GETKEYS: from every key and mouse event, so a Shift
+// held down before the click still counts.
+const modifiersDown = {shift: false, option: false, command: false, control: false, caps: false};
+for (const type of ['keydown', 'keyup', 'mousedown', 'mousemove', 'mouseup']) {
+  document.addEventListener(type, e => {
+    Object.assign(modifiersDown, {shift: e.shiftKey, option: e.altKey, command: e.metaKey, control: e.ctrlKey,
+                                  caps: !!e.getModifierState?.('CapsLock')});
+  }, true);
 }
 
 const canvasWrapper = document.getElementById('canvas-wrapper');
@@ -2539,25 +2549,75 @@ let gfxPenX = 0, gfxPenY = 0;  // pen position after last text draw (for GETPEN)
 let gfxPenMode = 8;   // 8=patCopy (normal), 10=patXor (rubber-band XOR)
 let savedPenState = null;   // CALL GETPENSTATE with a non-variable argument
 
-// QuickDraw's pattern transfer mode decides what a drawing operation does to the
-// pixels it covers. ZBasic draws with a solid pattern (PEN's 5th argument only
-// picks a grey level, which we approximate with a colour), and for a solid
-// pattern every mode collapses to one of four actions:
-//    8 patCopy,  9 patOr       paint the pen colour
-//   10 patXor                  invert whatever is already there
-//   11 patBic,  12 notPatCopy  paint the background, i.e. erase
-//   13, 14, 15                 leave the destination alone
-// Only 8, 10, 11 and 12 appear across these programs. Treating 10 as an ordinary
-// black stroke is what left MacPThy's rubber-banded budget line, marker lines and
-// hand-drawn curves as a fan of stale black lines trailing the cursor: the source
-// draws each one twice in mode 10 precisely so the second pass erases the first.
-// Treating 11 as black instead of as an erase painted solid blocks over the tool
-// palette where the program meant to clear a readout.
+// QuickDraw's pen paints with an 8x8 pattern, and its transfer mode says what
+// each bit of the pattern does to the pixel under it:
+//    8 patCopy     1 → foreground, 0 → background
+//    9 patOr       1 → foreground
+//   10 patXor      1 → inverted
+//   11 patBic     1 → background
+//   12 notPatCopy  1 → background, 0 → foreground
+//   13–15          the same as 9–11 for the 0 bits
+// With the usual solid pattern 10 inverts and 11/12 erase. Treating 10 as an
+// ordinary black stroke left MacPThy's rubber-banded lines as a fan of stale
+// lines trailing the cursor (the source draws each twice in mode 10 so that
+// the second pass erases the first); treating 11 as black painted solid blocks
+// where the program meant to clear a readout.
+let penPat = null;   // the pen pattern's 8 rows; null is solid (pattern 0)
+const PEN_MODES = {8: ['fg', 'bg'], 9: ['fg', null], 10: ['xor', null], 11: ['bg', null],
+                   12: ['bg', 'fg'], 13: [null, 'fg'], 14: [null, 'xor'], 15: [null, 'bg']};
+// {op, colour} for a solid pen; with a pattern also {rows, on, off} (the 1
+// and 0 bits' colours, null for "leave"); for XOR {op: 'difference', rows,
+// xorOnes}. Null when the pen changes nothing.
 function penPaint() {
-  if (gfxPenMode === 10) return {colour: '#ffffff', op: 'difference'};
-  if (gfxPenMode === 11 || gfxPenMode === 12) return {colour: currentBg, op: 'source-over'};
-  if (gfxPenMode >= 13) return null;
-  return {colour: currentFg, op: 'source-over'};
+  const [one, zero0] = PEN_MODES[gfxPenMode] ?? PEN_MODES[8];
+  const zero = penPat ? zero0 : null;   // a solid pattern has no 0 bits
+  if (!one && !zero) return null;
+  if (one === 'xor' || zero === 'xor') return {op: 'difference', rows: penPat, xorOnes: one === 'xor'};
+  const col = k => k === 'fg' ? currentFg : k === 'bg' ? currentBg : null;
+  return {op: 'source-over', colour: col(one) ?? col(zero), rows: penPat, on: col(one), off: col(zero)};
+}
+// ZBasic's numbered pen patterns: every ZBasic application carries this list as
+// its PAT# 0 resource (these are CDraw's), and PEN's 5th argument indexes it
+// from 0, solid black. A program's own PAT# 0 takes precedence.
+const ZBASIC_PATTERNS = ('ffffffffffffffff ddff77ffddff77ff dd77dd77dd77dd77 aa55aa55aa55aa55 55ff55ff55ff55ff ' +
+  'aaaaaaaaaaaaaaaa eeddbb77eeddbb77 8888888888888888 0000000000000000 8000080080000800 8800220088002200 ' +
+  '8822882288228822 aa00aa00aa00aa00 ff00ff00ff00ff00 1122448811224488 ff000000ff000000 0102040810204080 ' +
+  'ff0010107c101000 55002020f8202000 ff000044ee440000 aa000044ee440000 808888be88888080 08883e8808800080 ' +
+  '889c8880889c8880 881c8800881c8800 0040e04000040e04 aa0040e0440e0400 ff0000007c000000 aa0000007c000000 ' +
+  'ff003800ff003800 aa003800aa003800 80be808080be8080 803e8000803e8000 803e803e803e803e 3901010139010101 ' +
+  '801c8000801c8000 803e800080008000 801c801c801c801c 0007007000070070 000f00ff00f000ff f00000000f000000 ' +
+  'e00000000e000000 0000000e000000f8 0000000f000000f0').split(' ');
+function penPattern(n) {
+  const res = findRes('PAT#', 0);
+  let rows;
+  if (res && n >= 0 && n < ((res.data[0] << 8) | res.data[1]) && res.data.length >= 10 + 8 * n) rows = [...res.data.slice(2 + 8 * n, 10 + 8 * n)];
+  else rows = (ZBASIC_PATTERNS[n] ?? ZBASIC_PATTERNS[0]).match(/../g).map(h => parseInt(h, 16));
+  return rows.every(r => r === 255) ? null : rows;
+}
+// A fill style tiling the pattern: 1 bits in `on`, 0 bits in `off` (null =
+// transparent). Patterns line up with the window's own coordinates.
+const patternTiles = new Map();
+function patternFill(c, rows, on, off) {
+  const key = `${rows}|${on}|${off}`;
+  let tile = patternTiles.get(key);
+  if (!tile) {
+    tile = newCanvas(8, 8);
+    const t = tile.getContext('2d');
+    for (let y = 0; y < 8; y++) for (let x = 0; x < 8; x++) {
+      const colour = (rows[y] >> (7 - x)) & 1 ? on : off;
+      if (colour) { t.fillStyle = colour; t.fillRect(x, y, 1, 1); }
+    }
+    patternTiles.set(key, tile);
+  }
+  return c.createPattern(tile, 'repeat');
+}
+// The pen as a per-pixel colour (for painting regions): [r, g, b] or null.
+function penPixel(p) {
+  const bit = (x, y) => !p.rows || ((p.rows[y & 7] >> (7 - (x & 7))) & 1) === 1;
+  if (p.op === 'difference') return (x, y) => bit(x, y) === p.xorOnes ? [0, 0, 0] : null;
+  const on = p.rows ? p.on : p.colour, off = p.rows ? p.off : null;
+  const onRgb = on && cssRgb(on), offRgb = off && cssRgb(off);
+  return (x, y) => bit(x, y) ? onRgb : offRgb;
 }
 // Non-null while CALL OPENRGN is in effect: the lines "drawn" since (`segs`),
 // whose outline CALL CLOSERGN turns into the region, and their bounding box.
@@ -2583,7 +2643,7 @@ let xorShapeCanvas = null;
 // is a different picture. MacPThy's rubber band turns on exactly that: each pass
 // of `PLOT TO X,Y TO Xnew,Ynew` erases the previous band with its first leg and
 // draws the new one with its second, and the two legs overlap near the anchor.
-function paintXor(bounds, draws) {
+function paintXor(bounds, draws, pen = null) {
   const S = CANVAS_SCALE;
   // putImageData ignores both the transform and the clip, so the current
   // CLIPRECT has to be applied here by hand.
@@ -2609,7 +2669,11 @@ function paintXor(bounds, draws) {
     octx.setTransform(1, 0, 0, 1, 0, 0);
     octx.fillStyle = '#fff'; octx.fillRect(0, 0, w, h);
     octx.setTransform(S, 0, 0, S, -sx, -sy);   // window coordinates, offset to the buffer
-    octx.fillStyle = '#000'; octx.strokeStyle = '#000'; octx.lineWidth = penWidth;
+    // A patterned pen inverts only the pixels under the pattern's 1 bits
+    // (patXor) or 0 bits (notPatXor).
+    const penInk = pen?.rows ? patternFill(octx, pen.rows, pen.xorOnes ? '#000' : null, pen.xorOnes ? null : '#000') : '#000';
+    octx.imageSmoothingEnabled = false;
+    octx.fillStyle = penInk; octx.strokeStyle = penInk; octx.lineWidth = penWidth;
     draw(octx);
     const src = octx.getImageData(0, 0, w, h).data;
     for (let p = 0, i = 0; p < toggle.length; p++, i += 4) if (ink(src, i)) toggle[p] ^= 1;
@@ -2643,8 +2707,10 @@ function paintShape(bounds, draw) {
   const draws = Array.isArray(draw) ? draw : [draw];
   const p = penPaint();
   if (!p) return;                            // modes 13-15 leave the pixels alone
-  if (p.op === 'difference') { paintXor(bounds, draws); return; }
-  ctx.fillStyle = p.colour; ctx.strokeStyle = p.colour;
+  if (p.op === 'difference') { paintXor(bounds, draws, p); return; }
+  const fill = p.rows ? patternFill(ctx, p.rows, p.on, p.off) : p.colour;
+  ctx.imageSmoothingEnabled = false;   // pattern pixels stay square
+  ctx.fillStyle = fill; ctx.strokeStyle = fill;
   for (const d of draws) d(ctx);
 }
 // QuickDraw's pen is a penWidth x penHeight rectangle hanging below and to the
@@ -2893,7 +2959,9 @@ function rgnBitmap(r, colour) {
   const img = oc.createImageData(w, h), d = img.data;
   for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
     if (r.mask && !r.mask[y * w + x]) continue;
-    const [cr, cg, cb] = colour(r.left + x, r.top + y), i = (y * w + x) * 4;
+    const c = colour(r.left + x, r.top + y);
+    if (!c) continue;
+    const [cr, cg, cb] = c, i = (y * w + x) * 4;
     d[i] = cr; d[i+1] = cg; d[i+2] = cb; d[i+3] = 255;
   }
   oc.putImageData(img, 0, 0);
@@ -3202,7 +3270,7 @@ async function runProgram() {
   renderTabs();
   currentFg = '#000000'; currentBg = '#ffffff';
   penX = 0; penY = 0; penWidth = 1; penHeight = 1;
-  gfxPenMode = 8;
+  gfxPenMode = 8; penPat = null;
   textX = 0; textY = textSize; textFont = 3; textTransferMode = 0; yieldCounter = 0;
   printWidth = 0; printTab = 16;
   mouseDown = false; mouseX = 0; mouseY = 0; mousePrevDown = false; mouseLastPressTime = 0;
@@ -4169,22 +4237,13 @@ async function execSysCall(stmt, env) {
       const v = await n(0);
       if (v !== 0) { penWidth = v; penHeight = v; }
       if (args.length >= 2) { const h = await n(1); if (h !== 0) penHeight = h; }
-      // PEN sets the pen, and a transfer mode it does not name goes back to
-      // patCopy rather than staying as whatever was left over. CDraw depends on
-      // this: `Draw_Type` clears the palette strip with `PEN ,,,11 : BOX FILL`
-      // and then draws the palette and all three curves after a plain
-      // `PEN ,,,,0` — which the author plainly means as "normal black pen", and
-      // which is the only reading under which that code can draw anything. The
-      // size and pattern do stay put; only the mode is re-defaulted, because
-      // programs that want a wide pen set it once and then adjust the mode
-      // alone (Grglflx's `PEN 3,3,1,8,0` … `PEN ,,,12` … `PEN ,,,8`).
-      gfxPenMode = (args.length >= 4 && args[3] !== null) ? Math.round(await n(3)) : 8;
-      if (args.length >= 5 && args[4] !== null) {
-        // Mac pen patterns: 0=default(black), 1=ltGray, 2=gray, 3=dkGray, 4=black, 5=lightGray
-        const pat = Math.round(await n(4));
-        const grayMap = {0:'#000000', 1:'#bbbbbb', 2:'#888888', 3:'#555555', 4:'#000000', 5:'#999999'};
-        currentFg = grayMap[pat] ?? '#000000';
-      }
+      // PEN width, height, visible, mode, pattern: what it leaves out stays as
+      // it was. CDraw's rubber band shows it: `PEN 3,3,,10,3` and then
+      // `PEN 1,1,,,7 : CALL LINETO…` must still draw in XOR, or the next pass
+      // could not erase the line. (An older rule reset the mode to patCopy; it
+      // came from CDraw45.txt, a later listing half translated to another BASIC.)
+      if (args.length >= 4 && args[3] !== null) gfxPenMode = Math.round(await n(3));
+      if (args.length >= 5 && args[4] !== null) penPat = penPattern(Math.round(await n(4)));
       if (ctx) ctx.lineWidth = penWidth;
       return;
     }
@@ -5556,7 +5615,7 @@ async function execProcCall(stmt, env) {
           r = rgnCombine('diff', r, rgnInset(r, penWidth, penHeight));
         }
         const p = penPaint();
-        if (p) rgnPaint(r, () => p.op === 'difference' ? [0, 0, 0] : cssRgb(p.colour), p.op === 'difference');
+        if (p) rgnPaint(r, penPixel(p), p.op === 'difference');
       }
       return;
     }
@@ -5665,23 +5724,32 @@ async function execProcCall(stmt, env) {
       const round = name.includes('round');
       const oval  = name.includes('oval');
       const rad = round ? Math.min(Math.abs(Number(await ev(1)) || 16) / 2, w / 2, h / 2) : 0;
+      // Frame… and Paint… draw with the pen — its pattern and its mode, so in
+      // XOR they can be undone by drawing again — Erase… with the background,
+      // FillRect with the pattern it is given, InvertRect inverts. (Frames
+      // and paints used to ignore the pen, so CDraw's XOR-painted
+      // change-in-f rectangle could never be erased and piled up in black.)
       // i insets the shape: a frame is drawn inside it, as QuickDraw does.
-      const path = (i = 0) => {
-        ctx.beginPath();
-        if (oval) ctx.ellipse(r.left + w/2, r.top + h/2, Math.max(0, w/2 - i), Math.max(0, h/2 - i), 0, 0, Math.PI*2);
-        else if (round) ctx.roundRect(r.left + i, r.top + i, w - 2*i, h - 2*i, rad);
-        else ctx.rect(r.left, r.top, w, h);
+      const shape = (c, i = 0) => {
+        c.beginPath();
+        if (oval) c.ellipse(r.left + w/2, r.top + h/2, Math.max(0, w/2 - i), Math.max(0, h/2 - i), 0, 0, Math.PI*2);
+        else c.roundRect(r.left + i, r.top + i, w - 2*i, h - 2*i, rad);
       };
+      const box = pointBounds([[r.left, r.top], [r.right, r.bottom]], 0);
       if (name.startsWith('frame')) {
-        ctx.fillStyle = ctx.strokeStyle = currentFg;
-        if (oval || round) { ctx.lineWidth = penWidth; path(penWidth / 2); ctx.stroke(); }
-        else penFrame(ctx, r.left, r.top, r.right, r.bottom);
+        if (oval || round) paintShape(box, c => { c.lineWidth = penWidth; shape(c, penWidth / 2); c.stroke(); });
+        else paintShape(box, c => penFrame(c, r.left, r.top, r.right, r.bottom));
+      } else if (name.startsWith('paint')) {
+        paintShape(box, c => { if (oval || round) { shape(c); c.fill(); } else c.fillRect(r.left, r.top, w, h); });
       } else if (name.startsWith('erase')) {
-        ctx.fillStyle = currentBg; path(); ctx.fill();
+        ctx.fillStyle = currentBg;
+        if (oval || round) { shape(ctx); ctx.fill(); } else ctx.fillRect(r.left, r.top, w, h);
       } else if (name === 'invertrect') {
         invertRectPixels(r.left, r.top, w, h);
-      } else {
-        ctx.fillStyle = currentFg; path(); ctx.fill();
+      } else {   // FILLRECT(rect, pattern)
+        ctx.imageSmoothingEnabled = false;
+        ctx.fillStyle = patternFill(ctx, await patternRows(stmt.args?.[1], env), currentFg, currentBg);
+        ctx.fillRect(r.left, r.top, w, h);
       }
       showCanvas();
       return;
@@ -5961,7 +6029,7 @@ async function execProcCall(stmt, env) {
     // drew the axes with an erasing pen and the graph came up blank.
     case 'getpenstate': case 'setpenstate': {
       const a0 = stmt.args?.[0];
-      const state = () => ({penWidth, penHeight, gfxPenMode, currentFg, penX, penY});
+      const state = () => ({penWidth, penHeight, gfxPenMode, penPat, currentFg, penX, penY});
       if (name === 'getpenstate') {
         const s = JSON.stringify(state());
         if (a0?.type === 'variable') writeVar(env, a0.name, s); else savedPenState = state();
@@ -5974,6 +6042,7 @@ async function execProcCall(stmt, env) {
       if (st && typeof st === 'object') {
         penWidth = st.penWidth ?? penWidth; penHeight = st.penHeight ?? penHeight;
         gfxPenMode = st.gfxPenMode ?? gfxPenMode; currentFg = st.currentFg ?? currentFg;
+        if ('penPat' in st) penPat = st.penPat;
         penX = st.penX ?? penX; penY = st.penY ?? penY;
         if (ctx) ctx.lineWidth = penWidth;
       }
@@ -6065,21 +6134,25 @@ async function execProcCall(stmt, env) {
     // this to undo a PEN they set earlier; as a no-op an XOR or erase pen leaked
     // into everything drawn afterwards.
     case 'pennormal':
-      penWidth = 1; penHeight = 1; gfxPenMode = 8; currentFg = '#000000';
+      penWidth = 1; penHeight = 1; gfxPenMode = 8; penPat = null; currentFg = '#000000';
       if (ctx) ctx.lineWidth = 1;
       return;
     case 'penpat':
     case 'modaldialog': case 'begindialog': case 'enddialog':
     case 'teautoview': return;
+    // CALL GETKEYS(keyMap) — the 128-bit KeyMap, one bit per Mac key code: key
+    // k is bit k MOD 8 of byte k \ 8. Only the modifier keys are tracked
+    // (modifiersDown). CDraw's FN ShiftDown reads Shift (key 56) with
+    // FN BITTST(VARPTR(KeyRecord(3)), 15); a Shift-drag over a curve shades the
+    // area under the derivative, which with no keyboard never appeared.
     case 'getkeys': {
-      // CALL GETKEYS(arr) — fill key state array with zeros (no key pressed)
-      const arg0 = stmt.args?.[0];
-      if (arg0?.type === 'callable' || arg0?.type === 'variable') {
-        const n = arg0.name;
-        const arr = readArray(env, n);
-        if (Array.isArray(arr)) arr.fill(0);
-        else writeVar(env, n, 0);
-      }
+      const bytes = new Array(16).fill(0);
+      for (const [code, on] of [[56, modifiersDown.shift], [57, modifiersDown.caps], [58, modifiersDown.option],
+                                [59, modifiersDown.control], [55, modifiersDown.command]])
+        if (on) bytes[code >> 3] |= 1 << (code & 7);
+      const words = [];
+      for (let i = 0; i < 16; i += 2) words.push(((bytes[i] << 8) | bytes[i + 1]) << 16 >> 16);
+      await writeWords(stmt.args?.[0], env, words);
       return;
     }
     case 'getfontinfo': {
@@ -6684,9 +6757,11 @@ async function evalCallable(node, env, fnCall = false) {
       return 0;
     }
 
+    // FN BITTST(ptr, n) — the Toolbox's bit numbering: bit 0 is the high bit of
+    // the byte at ptr.
     case 'bittst': {
-      // FN BITTST(ptr, bit) — test a bit in memory (stub: keyboard state, always false)
-      return 0;
+      const ptr = Math.floor(await N(0)), bit = Math.floor(await N(1));
+      return (fakeReadBytes(ptr + (bit >> 3), 1)[0] >> (7 - (bit & 7))) & 1 ? -1 : 0;
     }
     case 'stringwidth': {
       const str = String(await A(0) ?? '');

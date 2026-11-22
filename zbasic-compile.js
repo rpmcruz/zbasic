@@ -6,8 +6,16 @@ const path = require("path");
 // ── The parser ────────────────────────────────────────────────
 const grammar = fs.readFileSync("zbasic.pegjs", "utf8");
 const parserSource = peg.generate(grammar, {cache: true, output: "source"});
-fs.writeFileSync("zbasic-compiled.js", `var ZBasicParser = ${parserSource};\n`);
+const compiled = `var ZBasicParser = ${parserSource};\n`;
+fs.writeFileSync("zbasic-compiled.js", compiled);
 console.log("Written zbasic-compiled.js");
+// index.html loads the parser as zbasic-compiled.js?v=<hash of it>. Browsers
+// cache scripts (GitHub Pages for ten minutes), and a cached parser of an older
+// grammar with a newer index.html misreads programs; a new hash forces a fresh copy.
+const hash = require("crypto").createHash("sha1").update(compiled).digest("hex").slice(0, 10);
+const html = fs.readFileSync("index.html", "utf8");
+const tagged = html.replace(/<script src="zbasic-compiled\.js(\?v=[0-9a-f]*)?"><\/script>/, `<script src="zbasic-compiled.js?v=${hash}"></script>`);
+if (tagged !== html) { fs.writeFileSync("index.html", tagged); console.log(`index.html now loads zbasic-compiled.js?v=${hash}`); }
 
 // ── The program list ──────────────────────────────────────────
 // Served over HTTP there is no directory listing, so the picker in index.html

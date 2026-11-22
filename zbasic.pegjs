@@ -212,7 +212,10 @@ defCmd = "DEF"i __ keyword:identifier _ "=" _ arg:expression
   { return {type: "defCmd", keyword, args: args || []}; }
   / "DEF"i __ keyword:identifier arg:(_ expression)?
   { return {type: "defCmd", keyword, arg: arg ? arg[1] : null}; }
-assignVar = name:identifier fields:("." identifier)* field:(";" _ (integer / variable))? _ idx:("(" _ exprArgs _ ")")? _ "=" _ value:expression
+// `CASE =Average` is the next case of a SELECT, not an assignment to a variable
+// named CASE: read that way it joined the previous case's body, so CDraw's
+// `SELECT Nearest : CASE =Derivative … CASE =Average …` ran both branches.
+assignVar = !("CASE"i ![a-zA-Z0-9_%&!#$]) name:identifier fields:("." identifier)* field:(";" _ (integer / variable))? _ idx:("(" _ exprArgs _ ")")? _ "=" _ value:expression
   { return {type: "assign", name, fields: fields.map(f => f[1]), field: field ? field[2] : null, idx: idx ? idx[2] : null, value}; }
 
 // The body is optional: "LONG FN F(A,B) : END FN = A+B" is a legal one-liner.

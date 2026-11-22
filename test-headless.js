@@ -98,6 +98,7 @@ function worker() {
       },
       createImageData: (w, h) => ({width: w, height: h, data: new Uint8ClampedArray(w * h * 4)}),
       getTransform: () => ({a: 1, b: 0, c: 0, d: 1, e: 0, f: 0}),
+      createPattern: () => ({}),
     };
     for (const f of ["fillRect", "strokeRect", "clearRect", "putImageData", "save", "restore", "beginPath",
       "closePath", "moveTo", "lineTo", "stroke", "fill", "arc", "ellipse", "rect", "roundRect", "clip",
