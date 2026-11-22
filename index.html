@@ -4652,11 +4652,14 @@ async function execSysCall(stmt, env) {
       await fileWrite(num, fakeReadBytes(Math.floor(await n(1)), Math.max(0, Math.floor(await n(2)))));
       return;
     }
-    // RESTORE [expression] — reset the DATA pointer to the first item, or to the
-    // item numbered by the expression (1-based, per the reference).
+    // RESTORE [n] — point READ at DATA item n, counting from 0: the reference's
+    // example reads "FOUR" after RESTORE 4 from DATA ZERO, ONE, TWO, … MacPThy
+    // agrees — its RESTORE 28 lands on its tool names and RESTORE 50 on its
+    // fill patterns. Counted from 1, every READ after them was one item early:
+    // I Map 1 was labelled "BackSpace", and DSM's + and − patterns, read in
+    // pairs, each got the other's rows.
     case 'RESTORE': {
-      if (args.length > 0 && args[0]) dataPtr = Math.max(0, Math.floor(await n(0)) - 1);
-      else dataPtr = 0;
+      dataPtr = args[0] ? Math.max(0, Math.floor(await n(0))) : 0;
       return;
     }
 
