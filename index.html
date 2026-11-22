@@ -246,6 +246,26 @@ body {
   background: #e0e0e0; border: 1px solid #555; border-radius: 3px; cursor: pointer;
 }
 .mac-alert-btn.default { border-width: 3px; border-radius: 8px; font-weight: bold; }
+.mac-alert-btn:disabled { color: #aaa; cursor: default; }
+/* The Standard File dialog that FILES$ puts up, and the Documents manager. */
+.mac-alert.sf { width: 440px; max-width: calc(100vw - 32px); }
+.sf-title { font-weight: bold; margin-bottom: 8px; white-space: pre-wrap; }
+.sf-body { display: flex; gap: 12px; }
+.sf-list {
+  flex: 1; min-width: 0; height: 168px; overflow-y: auto;
+  border: 1px solid #000; background: #fff; outline: none;
+}
+.sf-item { display: flex; justify-content: space-between; gap: 10px; padding: 2px 6px; cursor: default; }
+.sf-item span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sf-item.sel { background: #000; color: #fff; }
+.sf-type { color: #888; font-size: 10px; align-self: center; }
+.sf-item.sel .sf-type { color: #ccc; }
+.sf-empty { padding: 8px; color: #888; font-style: italic; }
+.sf-side { display: flex; flex-direction: column; gap: 6px; }
+.sf-side hr { border: none; border-top: 1px solid #aaa; margin: 4px 0; }
+.sf-name { display: block; width: 100%; margin-top: 8px; font: inherit; padding: 2px 4px; border: 1px solid #000; }
+.sf-note { margin-top: 8px; color: #666; font-size: 11px; }
+.sf-note.warn { color: #b00; }
 .mac-btn.selected { background: #000; color: #fff; }
 /* BUTTON type 2 is a check box and type 3 a radio button, not a push button.
    Grglflx's setup dialog is built almost entirely from these, most of them
@@ -258,14 +278,17 @@ body {
   display: flex;
   align-items: center;
   justify-content: flex-start;
-  gap: 3px;
+  /* The Mac draws a 12-pixel box and starts the title 4 pixels after it, so a
+     control only 15 pixels wide — MacPThy's budget-line tool, titled "B" — shows
+     the box alone. */
+  gap: calc(4px * var(--ui-scale, 1));
   padding: 0;
 }
-.mac-check.selected, .mac-radio.selected { background: transparent; color: inherit; }
+.mac-check.selected, .mac-radio.selected { background: transparent; color: #000; }
 .mac-check .ind, .mac-radio .ind {
   position: relative;
   flex: 0 0 auto;
-  width: 0.92em; height: 0.92em;
+  width: calc(12px * var(--ui-scale, 1)); height: calc(12px * var(--ui-scale, 1));
   border: 1px solid #000;
   background: #fff;
 }
@@ -276,7 +299,7 @@ body {
 }
 .mac-check.selected .ind::after {
   content: '\2715'; position: absolute; inset: 0;
-  font-size: 0.75em; line-height: 0.92em; text-align: center; color: #000;
+  font-size: calc(10px * var(--ui-scale, 1)); line-height: calc(12px * var(--ui-scale, 1)); text-align: center; color: #000;
 }
 .mac-check:disabled .ind, .mac-radio:disabled .ind { border-color: #aaa; }
 .mac-check:disabled .ind::after, .mac-radio:disabled .ind::after { background: #aaa; color: #aaa; }
@@ -292,15 +315,19 @@ body {
   #canvas-wrapper { align-items: flex-start; }
 }
 .mac-editfield {
-  background: white;
-  border: 1px solid #888;
-  padding: 1px 2px;
-  font-size: var(--ctrl-font, 12px);
-  width: 100%;
-  height: 100%;
+  /* --ef-size is the field's own point size (the TEXT size in force when it
+     was built); --ui-scale is how many screen pixels one window pixel takes. */
+  font-size: calc(var(--ef-size, 12) * var(--ui-scale, 1) * 1px);
+  line-height: 1;
+  background: transparent;
+  border: none;
+  padding: 0 1px;
   display: block;
   outline: none;
+  color: #000;
 }
+.mac-editfield.framed { background: white; border: 1px solid #000; }
+.mac-editfield:read-only { cursor: default; }
 </style>
 </head>
 <body>
@@ -314,6 +341,7 @@ body {
     <option value="">— no file loaded —</option>
   </select>
   <button class="tb-btn" id="btn-run" onclick="toggleRun()" disabled>Run</button>
+  <button class="tb-btn" id="btn-docs" onclick="fileDialog({mode: 'manage'})" title="The documents the programs have saved">Documents</button>
 </div>
 
 <div id="program-view">
@@ -328,11 +356,18 @@ body {
 <script src="zbasic-compiled.js"></script>
 <script>
 const parser = ZBasicParser;
-const CANVAS_SCALE = 2;  // render at 2× logical resolution for crisp text
+// Device pixels per window pixel in every canvas. It follows the size the
+// windows are actually shown at (times devicePixelRatio), so drawing is done at
+// screen resolution rather than drawn small and stretched. Programs keep working
+// in their own window coordinates through the context transform; the few places
+// that touch pixels directly convert with dev(). See rescaleCanvases().
+let CANVAS_SCALE = 2;
+const dev = v => Math.round(v * CANVAS_SCALE);
 
 // ── File storage ──────────────────────────────────────────────
 const files = {};
 let loadedFiles = [];
+let loadedRsrc = [];    // names of the resource forks loaded with the program
 let currentProgram = null;
 
 // ── Window/Canvas management ──────────────────────────────────
@@ -357,11 +392,26 @@ function _fakeBlock(addr, size) {
     if (addr >= b.base && addr + size <= b.base + b.data.length) return b;
   return null;
 }
-function fakeReadU32(addr) {
-  const b = _fakeBlock(addr, 4); if (!b) return 0;
-  const o = addr - b.base, d = b.data;
-  return ((d[o]<<24)|(d[o+1]<<16)|(d[o+2]<<8)|d[o+3]) >>> 0;
+// Every access to emulated memory goes through these, so that the bytes of a
+// variable (see "Variable memory" below) are always its current value.
+function fakeRead(addr, len) {
+  varsToMem(addr, len);
+  const b = _fakeBlock(addr, len);
+  return b ? b.data.subarray(addr - b.base, addr - b.base + len) : new Uint8Array(len);
 }
+function fakeWrite(addr, bytes) {
+  const b = _fakeBlock(addr, bytes.length); if (!b) return;
+  varsToMem(addr, bytes.length);   // a write to part of a variable keeps the rest of it
+  b.data.set(bytes, addr - b.base);
+  memToVars(addr, bytes.length);
+}
+function fakeReadU32(addr) { const d = fakeRead(addr, 4); return ((d[0]<<24)|(d[1]<<16)|(d[2]<<8)|d[3]) >>> 0; }
+function fakeReadU16(addr) { const d = fakeRead(addr, 2); return (d[0]<<8)|d[1]; }
+function fakeReadBytes(addr, len) { return fakeRead(addr, len).slice(); }
+function fakeWriteU32(addr, v) { fakeWrite(addr, [(v>>>24)&0xFF, (v>>>16)&0xFF, (v>>>8)&0xFF, v&0xFF]); }
+function fakeWriteU16(addr, v) { fakeWrite(addr, [(v>>8)&0xFF, v&0xFF]); }
+function fakeWriteBytes(addr, bytes) { fakeWrite(addr, bytes); }
+
 // The window manager's grafPort. Only its portRect (offset 8) is ever read —
 // programs BLOCKMOVE it out to learn the screen bounds, then centre their
 // windows in it and use it to reset the clip. 640x480 is a real Mac screen size
@@ -380,28 +430,174 @@ function wMgrPortPtr() {
   return _wMgrPort;
 }
 
-function fakeReadU16(addr) {
-  const b = _fakeBlock(addr, 2); if (!b) return 0;
-  const o = addr - b.base, d = b.data;
-  return (d[o]<<8)|d[o+1];
+// ── Variable memory ───────────────────────────────────────────
+// ZBasic gives every variable a fixed place in memory when it compiles the
+// program: simple variables in one block and arrays in another, each in the
+// order the source first mentions them. Programs rely on it. CDraw and Grglflx
+// save a document by writing out the bytes from VARPTR(FirstVar) to
+// VARPTR(LastVar) — FirstVar is DIMmed first, "We must insure that these items
+// are FIRST in the list", LastVar is only mentioned at the very end, and the
+// save routine DIMs LastArray "so array is at end of list" — and read it back
+// the same way. They also BLOCKMOVE a Rect into four DIMmed integers and
+// characters into a string's bytes.
+//
+// The interpreter keeps the variables themselves in globalVars, so this lays
+// the same blocks out in emulated memory and keeps the two in step: reading the
+// bytes first stores the variables' current values in them (varsToMem), and
+// writing them stores the new values back into the variables (memToVars). The
+// order and the integer and string sizes are ZBasic's; reals take 8 bytes so
+// that saving and loading a number gives back exactly the same number.
+let varMem = null;   // {base, end, bytes, view, slots (by address), byName}
+const VAR_SIZE = {int: 2, long: 4, real: 8};
+
+function varKind(canon) {
+  if (canon.endsWith('$')) return 'str';
+  const t = varTypes[canon];
+  return t === 'long' ? 'long' : (t === 'real' || t === 'mixed') ? 'real' : 'int';
 }
-function fakeWriteU32(addr, v) {
-  const b = _fakeBlock(addr, 4); if (!b) return;
-  const o = addr - b.base, d = b.data;
-  d[o]=(v>>>24)&0xFF; d[o+1]=(v>>>16)&0xFF; d[o+2]=(v>>>8)&0xFF; d[o+3]=v&0xFF;
+
+// Called once per run, after the equates are known (array bounds use them).
+async function layoutVariables(program) {
+  const scalars = [], arrays = [], seen = new Set();
+  const scalar = (name, strLen) => {
+    const canon = normVarName(name);
+    // `_name` is a compile-time constant and ERROR a reserved word, not variables.
+    if (!canon || seen.has(canon) || canon.startsWith('_') || canon === 'error' || recordOf[canon]) return;
+    seen.add(canon);
+    scalars.push({name: canon, kind: varKind(canon), strLen: strLen ?? 255});
+  };
+  const walk = node => {
+    if (!node || typeof node !== 'object') return;
+    if (Array.isArray(node)) { node.forEach(walk); return; }
+    switch (node.type) {
+      case 'localFunction': return;   // a LOCAL FN's variables are its own
+      case 'dim':
+        for (const a of node.args ?? []) {
+          if (a.dotType || a.size != null) continue;   // records, DIM name;bytes
+          const canon = normVarName(a.name);
+          if (!a.dims?.length) scalar(a.name, a.prefix);
+          else if (!seen.has(canon + '()')) {
+            seen.add(canon + '()');
+            arrays.push({name: canon, kind: varKind(canon), strLen: a.prefix ?? 255, dimExprs: a.dims});
+          }
+        }
+        return;
+      case 'variable': scalar(node.name); return;
+      case 'assign': if (!node.idx && !node.fields?.length) scalar(node.name); break;
+      case 'for': scalar(node.variable); break;
+    }
+    for (const k in node) walk(node[k]);
+  };
+  walk(program);
+
+  let size = 0;
+  const slots = [];
+  const place = (s, elemSize, dims) => {
+    s.elemSize = elemSize;
+    s.dims = dims;
+    s.count = dims ? dims.reduce((a, b) => a * b, 1) : 1;
+    s.addr = size;
+    size += (s.count * elemSize + 1) & ~1;   // word aligned, like the 68000 wants
+    slots.push(s);
+  };
+  const elemSize = s => s.kind === 'str' ? s.strLen + 1 : VAR_SIZE[s.kind];
+  for (const s of scalars) place(s, elemSize(s), null);
+  for (const a of arrays) {
+    const dims = [];
+    for (const d of a.dimExprs) {
+      let n = 0;
+      try { n = subIdx(await evalExpr(d, globalVars)); } catch (e) { /* not a constant */ }
+      dims.push(Math.max(0, n) + 1);
+    }
+    place(a, elemSize(a), dims);
+  }
+  const base = fakeMalloc(size);
+  const bytes = _fakeBlock(base, size).data;
+  for (const s of slots) s.addr += base;
+  varMem = {base, end: base + size, bytes, view: new DataView(bytes.buffer, bytes.byteOffset, size), slots,
+            byName: new Map(slots.map(s => [s.dims ? s.name + '()' : s.name, s]))};
 }
-function fakeWriteU16(addr, v) {
-  const b = _fakeBlock(addr, 2); if (!b) return;
-  const o = addr - b.base, d = b.data;
-  d[o]=(v>>8)&0xFF; d[o+1]=v&0xFF;
+
+// The address VARPTR gives a global variable or array element, or 0.
+async function varAddress(node, env) {
+  if (!varMem || !node?.name) return 0;
+  const canon = normVarName(node.name);
+  if (env !== globalVars && Object.prototype.hasOwnProperty.call(env, canon)) return 0;   // a LOCAL FN's own
+  if (node.type === 'variable') return varMem.byName.get(canon)?.addr ?? 0;
+  const s = varMem.byName.get(canon + '()');
+  if (!s || !node.args?.length) return 0;
+  let flat = 0;
+  for (let k = 0; k < s.dims.length; k++)
+    flat = flat * s.dims[k] + (node.args[k] ? subIdx(await evalExpr(node.args[k], env)) : 0);
+  return s.addr + flat * s.elemSize;
 }
-function fakeWriteBytes(addr, bytes) {
-  const b = _fakeBlock(addr, bytes.length); if (!b) return;
-  b.data.set(bytes, addr - b.base);
+
+// Calls fn(slot, first, last) for the elements of every variable that overlaps
+// the bytes [addr, addr+len).
+function varSlotsIn(addr, len, fn) {
+  if (!varMem || addr >= varMem.end || addr + len <= varMem.base) return;
+  const {slots} = varMem;
+  let lo = 0, hi = slots.length;
+  while (lo < hi) {
+    const m = (lo + hi) >> 1;
+    if (slots[m].addr + slots[m].count * slots[m].elemSize <= addr) lo = m + 1; else hi = m;
+  }
+  for (let i = lo; i < slots.length && slots[i].addr < addr + len; i++) {
+    const s = slots[i];
+    const first = Math.max(0, Math.floor((addr - s.addr) / s.elemSize));
+    const last = Math.min(s.count - 1, Math.floor((addr + len - 1 - s.addr) / s.elemSize));
+    if (first <= last) fn(s, first, last);
+  }
 }
-function fakeReadBytes(addr, len) {
-  const b = _fakeBlock(addr, len); if (!b) return new Uint8Array(len);
-  return b.data.slice(addr - b.base, addr - b.base + len);
+// Element i of an array slot, as the path of subscripts into the nested arrays.
+function slotPath(s, i) {
+  const path = [];
+  for (let k = s.dims.length - 1; k >= 0; k--) { path.unshift(i % s.dims[k]); i = Math.floor(i / s.dims[k]); }
+  return path;
+}
+// An array is also kept under its plain name (see arrKey), where it is not the
+// scalar of that name: CDraw has both ShowFlag() and, never assigned, ShowFlag.
+const isArrayAlias = v => typeof v === 'object' && v !== null;
+function slotGet(s, i) {
+  if (!s.dims) return isArrayAlias(globalVars[s.name]) ? undefined : globalVars[s.name];
+  let a = globalVars[arrKey(s.name)];
+  for (const k of slotPath(s, i)) a = Array.isArray(a) ? a[k] : undefined;
+  return a;
+}
+function slotSet(s, i, v) {
+  if (!s.dims) { if (!isArrayAlias(globalVars[s.name])) globalVars[s.name] = coerceVar(s.name, v); return; }
+  const path = slotPath(s, i), last = path.pop();
+  let a = globalVars[arrKey(s.name)];
+  for (const k of path) a = Array.isArray(a) ? a[k] : undefined;
+  if (Array.isArray(a)) a[last] = v;
+}
+function varsToMem(addr, len) {
+  varSlotsIn(addr, len, (s, first, last) => {
+    const {view, bytes, base} = varMem;
+    for (let i = first; i <= last; i++) {
+      const v = slotGet(s, i), at = s.addr - base + i * s.elemSize;
+      if (s.kind === 'str') {
+        const chars = strToMacRoman(typeof v === 'string' ? v : '').slice(0, Math.min(255, s.strLen));
+        bytes[at] = chars.length;
+        bytes.set(chars, at + 1);
+        continue;
+      }
+      const n = typeof v === 'number' && Number.isFinite(v) ? v : 0;
+      if (s.kind === 'real') view.setFloat64(at, n);
+      else if (s.kind === 'long') view.setInt32(at, Math.trunc(n));
+      else view.setInt16(at, Math.trunc(n));
+    }
+  });
+}
+function memToVars(addr, len) {
+  varSlotsIn(addr, len, (s, first, last) => {
+    const {view, bytes, base} = varMem;
+    for (let i = first; i <= last; i++) {
+      const at = s.addr - base + i * s.elemSize;
+      slotSet(s, i, s.kind === 'str' ? macRomanToStr(bytes.subarray(at + 1, at + 1 + Math.min(bytes[at], s.strLen)))
+        : s.kind === 'real' ? view.getFloat64(at) : s.kind === 'long' ? view.getInt32(at) : view.getInt16(at));
+    }
+  });
 }
 
 // Mac Roman → JS string. Written as explicit code points for bytes 0x80-0xFF:
@@ -430,6 +626,8 @@ function strToMacRoman(s) {
   }
   return out;
 }
+// CHR$: character codes are Mac Roman (CHR$(165) is "•").
+function macChr(n) { return macRomanToStr([Math.floor(Number(n)) & 0xFF]); }
 function macRomanToStr(bytes) {
   let s = '';
   for (const b of bytes) s += b < 128 ? String.fromCharCode(b) : (MAC_ROMAN_EXTRA[b-128] ?? '?');
@@ -439,7 +637,6 @@ function macRomanToStr(bytes) {
 // ── Mac resource store (loaded from .rsrc AppleDouble files) ───
 const rsrcTexts = {};    // lowercase name -> string
 const macResources = {}; // resType → [{id, name, data: Uint8Array}]
-let programDir = null;   // directory name inferred from loaded files (e.g. 'supermarket')
 const pictHandleMap = {};  // handle → {id, w, h, color}
 
 // Resource type arguments arrive either as a ZBasic named constant (_"TEXT")
@@ -534,27 +731,36 @@ function decodePictBitmap(d) {
 function drawPictBitmap(pict, x, y) {
   if (!ctx || !pict?.mask) return false;
   const S = CANVAS_SCALE, w = pict.w, h = pict.h;
-  const img = ctx.createImageData(w * S, h * S);
+  x = Math.floor(x); y = Math.floor(y);
+  const x0 = dev(x), y0 = dev(y), dw = dev(x + w) - x0, dh = dev(y + h) - y0;
+  if (dw <= 0 || dh <= 0) return false;
+  const img = ctx.createImageData(dw, dh);
   const px = img.data;
-  for (let sy = 0; sy < h * S; sy++) {
-    const my = (sy / S) | 0;
-    for (let sx = 0; sx < w * S; sx++) {
-      const v = pict.mask[my * w + ((sx / S) | 0)] ? 0 : 255;
-      const o = (sy * w * S + sx) * 4;
+  for (let j = 0; j < dh; j++) {
+    const my = Math.min(h - 1, Math.floor((y0 + j + 0.5) / S) - y);
+    for (let i = 0; i < dw; i++) {
+      const mx = Math.min(w - 1, Math.floor((x0 + i + 0.5) / S) - x);
+      const v = pict.mask[my * w + mx] ? 0 : 255;
+      const o = (j * dw + i) * 4;
       px[o] = px[o + 1] = px[o + 2] = v; px[o + 3] = 255;
     }
   }
-  ctx.putImageData(img, Math.floor(x) * S, Math.floor(y) * S);
+  ctx.putImageData(img, x0, y0);
   return true;
 }
 
 // Copy a loaded resource into fake memory and return a Mac-style handle
-// (a 4-byte master pointer that points at the resource data).
+// (a 4-byte master pointer that points at the resource data). Like the
+// Resource Manager, asking again for a resource already loaded returns the same
+// handle — Supermarket fetches its pictures on every redraw.
+let resHandles = new Map();   // resource → handle, for the current run
 function handleForResource(res) {
+  if (resHandles.has(res)) return resHandles.get(res);
   const dataAddr = fakeMalloc(res.data.length);
   fakeWriteBytes(dataAddr, res.data);
   const handle = fakeMalloc(4);
   fakeWriteU32(handle, dataAddr);
+  resHandles.set(res, handle);
   return handle;
 }
 let frontWindowId = null;
@@ -607,11 +813,11 @@ function getOrCreateWindow(id, title, w, h) {
     container.style.aspectRatio = `${W} / ${H}`;
     const c = document.createElement('canvas');
     c.className = 'win-canvas';
-    c.width = W * CANVAS_SCALE; c.height = H * CANVAS_SCALE;
+    c.width = dev(W); c.height = dev(H);
     container.appendChild(c);
     document.getElementById('canvas-wrapper').appendChild(container);
     const cx = c.getContext('2d', { willReadFrequently: true });
-    cx.scale(CANVAS_SCALE, CANVAS_SCALE);
+    cx.setTransform(CANVAS_SCALE, 0, 0, CANVAS_SCALE, 0, 0);
     cx.fillStyle = '#ffffff';
     cx.fillRect(0, 0, W, H);
     windowDefs[id] = { title: title || String(id), container, canvas: c, ctx: cx, logW: W, logH: H, teRecords: {} };
@@ -627,8 +833,8 @@ function getOrCreateWindow(id, title, w, h) {
       const win = windowDefs[id];
       win.logW = w; win.logH = h;
       win.container.style.aspectRatio = `${w} / ${h}`;
-      win.canvas.width = w * CANVAS_SCALE; win.canvas.height = h * CANVAS_SCALE;
-      win.ctx.scale(CANVAS_SCALE, CANVAS_SCALE);
+      win.canvas.width = dev(w); win.canvas.height = dev(h);
+      win.ctx.setTransform(CANVAS_SCALE, 0, 0, CANVAS_SCALE, 0, 0);
       win.ctx.__clipped = false;   // resizing reset the context, clip included
       win.ctx.fillStyle = '#ffffff';
       win.ctx.fillRect(0, 0, w, h);
@@ -644,22 +850,34 @@ function getOrCreateWindow(id, title, w, h) {
 
 // Fit every window into the wrapper without distorting it: scale uniformly by
 // whichever axis is tighter, so one logical pixel stays square on screen.
-function layoutWindows() {
+//
+// One scale factor for every window, not one per window. Scaling each window
+// to fill the wrapper blew Grglflx's 84x260 "Setup 2" dialog up to the size
+// of its 498x270 main window, pushing the Done button off the bottom of the
+// page. Windows on a Mac share a screen, so they share a scale: derive it
+// from a virtual screen at least as large as the biggest window.
+// Returns CSS pixels per window pixel, or 0 while the page has no size yet.
+function screenScale() {
   const wrap = document.getElementById('canvas-wrapper');
-  if (!wrap) return;
-  const availW = wrap.clientWidth, availH = wrap.clientHeight;
-  if (!availW || !availH) return;
-  // One scale factor for every window, not one per window. Scaling each window
-  // to fill the wrapper blew Grglflx's 84x260 "Setup 2" dialog up to the size
-  // of its 498x270 main window, pushing the Done button off the bottom of the
-  // page. Windows on a Mac share a screen, so they share a scale: derive it
-  // from a virtual screen at least as large as the biggest window.
+  const availW = wrap?.clientWidth, availH = wrap?.clientHeight;
+  if (!availW || !availH) return 0;
   let scrW = 512, scrH = 342;
   for (const w of Object.values(windowDefs)) {
     scrW = Math.max(scrW, w.logW || 0);
     scrH = Math.max(scrH, w.logH || 0);
   }
-  const s = Math.min(availW / scrW, availH / scrH);
+  return Math.min(availW / scrW, availH / scrH);
+}
+// The canvas resolution that puts one canvas pixel on each device pixel.
+function targetCanvasScale() {
+  const s = screenScale() * (window.devicePixelRatio || 1);
+  return s > 0 ? Math.min(6, Math.max(1, Math.round(s * 100) / 100)) : CANVAS_SCALE;
+}
+
+function layoutWindows() {
+  const s = screenScale();
+  if (!s) return;
+  scheduleRescale();
   for (const w of Object.values(windowDefs)) {
     const lw = w.logW || 512, lh = w.logH || 342;
     w.container.style.width  = `${Math.max(1, Math.floor(lw * s))}px`;
@@ -668,10 +886,42 @@ function layoutWindows() {
     // to track the window scale the same way canvas text does — otherwise a
     // button caption ends up a third the size of the TEXTBOX label beside it.
     w.container.style.setProperty('--ctrl-font', `${(12 * s).toFixed(2)}px`);
+    w.container.style.setProperty('--ui-scale', s.toFixed(4));
   }
   for (const id of Object.keys(windowDefs)) scalePgObjects(Number(id));
 }
 window.addEventListener('resize', layoutWindows);
+
+// Re-render every window at a new resolution once the layout has settled
+// (resizing the browser fires layout changes continuously). The pixels already
+// there are carried across, smoothed, so nothing is lost; then each window gets
+// an update event — DIALOG(0) = 5, what the Mac sends when a window needs
+// redrawing — so the program repaints it sharply at the new size. That repaint
+// also matters for exactness: an XOR-drawn shape is only erased by redrawing it
+// at the resolution it was drawn at.
+let rescaleTimer = null;
+function scheduleRescale() {
+  clearTimeout(rescaleTimer);
+  rescaleTimer = setTimeout(() => {
+    const S = targetCanvasScale();
+    if (Math.abs(S - CANVAS_SCALE) / CANVAS_SCALE > 0.04) rescaleCanvases(S);
+  }, 250);
+}
+function rescaleCanvases(S) {
+  CANVAS_SCALE = S;
+  for (const [id, w] of Object.entries(windowDefs)) {
+    const old = document.createElement('canvas');
+    old.width = w.canvas.width; old.height = w.canvas.height;
+    old.getContext('2d').drawImage(w.canvas, 0, 0);
+    w.canvas.width = dev(w.logW); w.canvas.height = dev(w.logH);   // also resets the context
+    w.ctx.setTransform(S, 0, 0, S, 0, 0);
+    w.ctx.drawImage(old, 0, 0, w.logW, w.logH);
+    w.ctx.lineWidth = penWidth;
+    w.ctx.__clipped = false;
+    reapplyClip(Number(id));
+    if (running) pushEvent('dialog', {code: 5, winRef: Number(id)});
+  }
+}
 // The wrapper also changes size without the viewport changing (the tab strip
 // appearing, a scrollbar showing up). Without this the windows keep the scale
 // they were built at and overflow the wrapper, cutting off the controls along
@@ -813,7 +1063,7 @@ function notePress(x, y, clicks) {
               : (now - mouseLastPressTime < MOUSE_MULTI_MS) ? Math.min(mouseClicks + 1, 3) : 1;
   mouseLastPressTime = now;
   mouseDown = true; mouseClickLatch = true;
-  if (mouseOn) pushEvent('mouse', {x, y});
+  if (running && onMouseHandler) pushEvent('mouse', {x, y});
 }
 function noteRelease() {
   mouseReleaseX = mouseX; mouseReleaseY = mouseY;
@@ -853,8 +1103,6 @@ canvasWrapper.addEventListener('touchmove', e => {
   [mouseX, mouseY] = canvasCoords(t.clientX, t.clientY);
 }, {passive: false});
 
-document.addEventListener('keydown', e => {
-});
 document.addEventListener('click', e => {
   if (!e.target.closest('.dyn-menu'))
     document.querySelectorAll('.dyn-menu.open').forEach(m => m.classList.remove('open'));
@@ -862,26 +1110,24 @@ document.addEventListener('click', e => {
 
 // ── File loading ──────────────────────────────────────────────
 // Empty the file store so a newly chosen program starts from nothing.
-function resetFileStore(dir) {
+function resetFileStore() {
   Object.keys(files).forEach(k => delete files[k]);
   Object.keys(rsrcTexts).forEach(k => delete rsrcTexts[k]);
   Object.keys(macResources).forEach(k => delete macResources[k]);
   loadedFiles.length = 0;
-  programDir = dir ?? null;
+  loadedRsrc.length = 0;
 }
 
-// Add one file to the store. A resource fork goes to the resource map; anything
-// else is program text, read byte-for-byte (latin1) because these are MacRoman
-// listings and the interpreter does its own character mapping.
+// Add one file (an ArrayBuffer) to the store. A resource fork goes to the
+// resource map; anything else is program text in Mac Roman, decoded here so
+// that strings hold the characters the program means — MacPThy's title screen
+// credits "ZBasic™", and ™ is byte 0xAA, which Latin-1 reads as "ª". Values
+// cross back into bytes only where the Mac would see bytes: CHR$/ASC, and the
+// emulated memory behind VARPTR and resources.
 function addFile(name, data) {
-  if (name.toLowerCase().endsWith('.rsrc')) { parseRsrcFile(data); return; }
-  files[name] = typeof data === 'string' ? data : bytesToLatin1(new Uint8Array(data));
+  if (name.toLowerCase().endsWith('.rsrc')) { loadedRsrc.push(name); parseRsrcFile(data); return; }
+  files[name] = macRomanToStr(new Uint8Array(data));
   if (!loadedFiles.includes(name)) loadedFiles.push(name);
-}
-function bytesToLatin1(bytes) {
-  let s = '';
-  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
-  return s;
 }
 
 // ── Program library ───────────────────────────────────────────
@@ -904,15 +1150,20 @@ async function loadProgramList() {
     sel.appendChild(opt);
   });
   sel.hidden = false;
+  // index.html?prog=Supermarket opens that program and runs it, so the README
+  // can link straight to each one.
+  const want = new URLSearchParams(location.search).get('prog');
+  const idx = want ? programList.findIndex(p => p.name.toLowerCase() === want.toLowerCase()) : -1;
+  if (idx >= 0) { await loadProgram(idx); runProgram(); }
 }
 
 async function loadProgram(index) {
   const prog = programList[Number(index)];
   if (!prog) return;
   document.getElementById('prog-select').value = String(index);
-  if (running) stopProgram();
+  if (running) await stopProgram();
   clearDisplay();
-  resetFileStore(prog.dir.split('/').pop());
+  resetFileStore();
   // Fetched in parallel, but stored in the manifest's order so that a program
   // with several candidate files still auto-selects the same one every time.
   const loaded = await Promise.all(prog.files.map(async f => {
@@ -923,7 +1174,7 @@ async function loadProgram(index) {
   for (const entry of loaded) if (entry) addFile(entry[0], entry[1]);
   updateFileSelect();
   const sel = document.getElementById('file-select');
-  if (loadedFiles.includes(prog.main)) { sel.value = prog.main; selectFile(prog.main); }
+  if (loadedFiles.includes(prog.main)) { sel.value = prog.main; await selectFile(prog.main); }
   else autoSelectFile();
 }
 loadProgramList();
@@ -934,15 +1185,7 @@ document.getElementById('file-input').addEventListener('change', function(e) {
   const flist = Array.from(e.target.files);
   if (flist.length === 0) return;
 
-  resetFileStore(null);
-
-  // Infer programDir from webkitRelativePath (e.g. "CDraw/CDraw45.txt" → "CDraw")
-  for (const file of flist) {
-    if (file.webkitRelativePath) {
-      const parts = file.webkitRelativePath.split('/');
-      if (parts.length >= 2) { programDir = parts[0]; break; }
-    }
-  }
+  resetFileStore();
 
   let pending = flist.length;
   flist.forEach(file => {
@@ -951,8 +1194,7 @@ document.getElementById('file-input').addEventListener('change', function(e) {
       addFile(file.name, ev.target.result);
       if (--pending === 0) { updateFileSelect(); autoSelectFile(); }
     };
-    if (file.name.toLowerCase().endsWith('.rsrc')) reader.readAsArrayBuffer(file);
-    else reader.readAsText(file, 'latin1');
+    reader.readAsArrayBuffer(file);
   });
   document.getElementById('prog-select').value = '';
   this.value = '';
@@ -994,10 +1236,9 @@ function parseRsrcFile(buffer) {
         for (let k = 0; k < nl; k++) name += String.fromCharCode(r.getUint8(nameListAbs + nameOffRel + 1 + k));
       }
       const data = new Uint8Array(buffer, rsrcOff + resDataOff + 4, resLen);
-      macResources[rtype].push({id: resId, name, data});
+      macResources[rtype].push({type: rtype, id: resId, name, data});
       if (rtype === 'TEXT') {
         rsrcTexts[name.toLowerCase()] = macRomanToStr(data);
-        console.log(`  rsrc TEXT: "${name}" (${resLen} bytes)`);
       }
     }
   }
@@ -1154,7 +1395,6 @@ function parseDITL(id) {
 const ALERT_ICONS = {alert: 'ℹ️', notealert: 'ℹ️', note: 'ℹ️',
                      cautionalert: '⚠️', caution: '⚠️',
                      stopalert: '🛑', stop: '🛑'};
-let alertResolve = null;
 // StopAlert/CautionAlert/NoteAlert/Alert put up a modal dialog built from an
 // ALRT resource and do not return until the user dismisses it. Answering 1
 // straight away instead is not a harmless simplification: MacPThy warns from
@@ -1170,57 +1410,74 @@ function showAlert(alrtId, icon) {
   const items = parseDITL(itemsId);
   const buttons = items.filter(it => it.kind === 4);
   const texts   = items.filter(it => it.kind === 8 || it.kind === 16);
+  // Alert text is laid out one item per line in the item list.
+  const text = texts.map(t => substParamText(t.text)).join('\n') || substParamText(paramText[0]);
+  // Item 1 is the default button: Return answers 1, Escape the cancel button.
+  return messageBox(icon, text, (buttons.length ? buttons : [{num: 1, text: 'OK'}])
+    .map(b => ({label: substParamText(b.text) || 'OK', value: b.num})), 1, buttons.length > 1 ? 2 : 1);
+}
 
+// A modal box with the alerts' look. fill(box, finish) builds its contents and
+// may return a keydown handler; the promise resolves with whatever finish() is
+// given. While a program is waiting on it, Stop dismisses it with `cancel`, or
+// the run could never be interrupted.
+let alertResolve = null;
+function openModal(fill, cancel, waitedOn = true) {
   const back = document.createElement('div');
   back.className = 'mac-alert-back';
   const box = document.createElement('div');
   box.className = 'mac-alert';
-  const row = document.createElement('div');
-  row.className = 'mac-alert-body';
-  const ic = document.createElement('div');
-  ic.className = 'mac-alert-icon';
-  ic.textContent = icon;
-  const msg = document.createElement('div');
-  msg.className = 'mac-alert-text';
-  // Alert text is laid out one item per line in the item list.
-  msg.textContent = texts.map(t => substParamText(t.text)).join('\n') || substParamText(paramText[0]);
-  row.append(ic, msg);
-  const btnRow = document.createElement('div');
-  btnRow.className = 'mac-alert-buttons';
-  box.append(row, btnRow);
   back.appendChild(box);
-
+  // Clicks in a modal must not reach the canvas underneath as a mouse-down.
+  back.addEventListener('mousedown', e => e.stopPropagation(), true);
   return new Promise(resolve => {
-    let done = false;
-    const finish = n => {
+    let done = false, onKey = null;
+    const finish = v => {
       if (done) return;
       done = true;
-      alertResolve = null;
-      document.removeEventListener('keydown', onKey, true);
+      if (alertResolve === stop) alertResolve = null;
+      if (onKey) document.removeEventListener('keydown', onKey, true);
       back.remove();
-      resolve(n);
+      resolve(v);
     };
-    // The dialog is modal, so its clicks must not reach the canvas underneath
-    // and register as a mouse-down in the program.
-    back.addEventListener('mousedown', e => e.stopPropagation(), true);
-    // Item 1 is the default button; the item list gives them in order, so the
-    // rightmost/first item is what Return activates.
-    const onKey = e => {
-      if (e.key === 'Enter' || e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); finish(e.key === 'Enter' ? 1 : (buttons.length > 1 ? 2 : 1)); }
-    };
-    document.addEventListener('keydown', onKey, true);
-    (buttons.length ? buttons : [{num: 1, text: 'OK'}]).forEach(b => {
-      const el = document.createElement('button');
-      el.className = 'mac-alert-btn' + (b.num === 1 ? ' default' : '');
-      el.textContent = substParamText(b.text) || 'OK';
-      el.onclick = () => finish(b.num);
-      btnRow.appendChild(el);
-    });
-    alertResolve = finish;
+    const stop = () => finish(cancel);
+    if (waitedOn) alertResolve = stop;
+    onKey = fill(box, finish) || null;
+    if (onKey) document.addEventListener('keydown', onKey, true);
     document.body.appendChild(back);
-    const first = btnRow.querySelector('.default') || btnRow.firstChild;
-    if (first) first.focus();
   });
+}
+
+// An icon, a message and a row of buttons [{label, value}]; Return picks the
+// button whose value is `def`, Escape answers `cancel`.
+function messageBox(icon, text, buttons, def, cancel) {
+  return openModal((box, finish) => {
+    const row = document.createElement('div');
+    row.className = 'mac-alert-body';
+    const ic = document.createElement('div');
+    ic.className = 'mac-alert-icon';
+    ic.textContent = icon;
+    const msg = document.createElement('div');
+    msg.className = 'mac-alert-text';
+    msg.textContent = text;
+    row.append(ic, msg);
+    const btnRow = document.createElement('div');
+    btnRow.className = 'mac-alert-buttons';
+    box.append(row, btnRow);
+    for (const b of buttons) {
+      const el = document.createElement('button');
+      el.className = 'mac-alert-btn' + (b.value === def ? ' default' : '');
+      el.textContent = b.label;
+      el.onclick = () => finish(b.value);
+      btnRow.appendChild(el);
+      if (b.value === def) setTimeout(() => el.focus());
+    }
+    return e => {
+      if (e.key !== 'Enter' && e.key !== 'Escape') return;
+      e.preventDefault(); e.stopPropagation();
+      finish(e.key === 'Enter' ? def : cancel);
+    };
+  }, cancel);
 }
 
 // A window's geometry lives in "pG3w" with the window number as its id; the
@@ -1461,7 +1718,6 @@ function buildPgObjects(wid) {
         break;
       }
       default:
-        if (debugMode) console.log(`[pG3c] window ${wid}: unhandled object kind ${o.kind}`);
     }
   }
   scalePgObjects(wid);
@@ -1520,7 +1776,7 @@ function installSubmenu(subId, menus) {
   menuDefs[subId] = makeMenu(title, {hier: true});
   items.forEach((it, idx) => {
     menuDefs[subId].items[idx + 1] = {
-      title: it.name, enabled: it.enabled, checked: false,
+      title: it.name, enabled: it.enabled, checked: it.cmd !== 0x1B && it.mark !== 0,
       cmd: it.cmd ? String.fromCharCode(it.cmd) : null,
       submenu: it.cmd === 0x1B ? it.mark : null
     };
@@ -1548,7 +1804,9 @@ function initMenuBarFromResources() {
       menuDefs[actualId].items[idx + 1] = {
         title: it.name,
         enabled: it.enabled,
-        checked: false,
+        // The mark byte is a check mark, except on a hierarchical item (cmd
+        // 0x1B), where it holds the submenu's id.
+        checked: it.cmd !== 0x1B && it.mark !== 0,
         cmd: it.cmd ? String.fromCharCode(it.cmd) : null,
         // A command character of 0x1B marks a hierarchical item: the "mark"
         // byte holds the id of the submenu to show. The MBAR only lists the
@@ -1580,18 +1838,29 @@ function updateFileSelect() {
   sel.disabled = false;
 }
 
+// Pick the file to start from — the same rule as pickMain() in
+// zbasic-compile.js, which explains it: the .MAIN; otherwise the listing of the
+// version the application (.rsrc) was built from, preferring the one recovered
+// from the tokenized source.
+function versionOf(name) {
+  const m = name.replace(/\.(detok\.txt|txt|bas|exe|rsrc)$/gi, '').match(/(\d+(?:\.\d+)*)\D*$/);
+  return m ? m[1] : null;
+}
 function autoSelectFile() {
-  if (loadedFiles.length === 0) return;
-  const mains = loadedFiles.filter(n => n.toUpperCase().endsWith('.MAIN'));
-  const txts  = loadedFiles.filter(n => n.toLowerCase().endsWith('.txt'));
-  // Prefer .MAIN; if none, use the sole .txt; if still none, give up.
-  const name = mains[0] ?? (txts.length === 1 ? txts[0] : null);
+  let name = loadedFiles.find(f => f.toUpperCase().endsWith('.MAIN'));
+  if (!name) {
+    const want = loadedRsrc.length ? versionOf(loadedRsrc[0]) : null;
+    let txt = loadedFiles.filter(f => f.toLowerCase().endsWith('.txt'));
+    if (want && txt.some(f => versionOf(f) === want)) txt = txt.filter(f => versionOf(f) === want);
+    const detok = txt.filter(f => f.toLowerCase().endsWith('.detok.txt'));
+    name = detok.length === 1 ? detok[0] : txt.length === 1 ? txt[0] : null;
+  }
   if (name) { document.getElementById('file-select').value = name; selectFile(name); }
 }
 
-function selectFile(name) {
+async function selectFile(name) {
   if (!name) return;
-  if (running) stopProgram();
+  if (running) await stopProgram();
   clearDisplay();
   parseAndLoad(name);
 }
@@ -1632,13 +1901,13 @@ function parseSource(name, depth = 0) {
   return parseTolerant(files[key], key, inc => parseSource(inc, depth + 1));
 }
 
-// These sources are program *listings*, and a listing can be lossy. CDraw's
-// Disable_Menus prints as `XXX.Enabled=False(MenuType),0)` — pGII wrote its own
-// shorthand for a MENU call over the front of the statement and left the tail of
-// the original behind, so nothing can parse that line. Blank it out and carry
-// on: losing it costs the File menu its greying-out, while refusing the file
-// costs the whole program. Line endings here are bare CRs, which PEG.js does not
-// count as line breaks, so the offset is what locates the damage.
+// A text listing can be lossy. CDraw45.txt, a much later export, has four
+// statements whose beginning was overwritten (`XXX.Enabled=False(MenuType),0)`);
+// nothing can parse those lines. Blank such a line out, warn, and carry on:
+// losing one statement costs less than refusing the whole file. (CDraw itself
+// now runs from its tokenized source, which has no such damage — see
+// zbasic-detokenize.js.) Line endings are bare CRs, which PEG.js does not count
+// as line breaks, so the error offset is what locates the damage.
 function parseTolerant(text, name, parseFile) {
   const skipped = [];
   for (;;) {
@@ -1677,21 +1946,32 @@ function parseAndLoad(name) {
 
 // ── Event system ──────────────────────────────────────────────
 let eventQueue = [];
-let eventWaiter = null;
+let eventWaiter = null;   // {accept(evt), resolve(evt)} while something blocks on the queue
+// Events the program has not taken yet wait here, as in the Mac's own event
+// queue. A program that never polls for some kind of event must not make the
+// queue grow without bound, so the oldest are dropped past this length.
+const EVENT_QUEUE_MAX = 200;
+// DIALOG(n) only ever reports dialog-class events (buttons, edit fields,
+// windows); menus, clicks and timers belong to their own traps.
+const isDialogEvent = e => !['menu', 'mouse', 'timer', 'edit'].includes(e.type);
 
 function pushEvent(type, data = {}) {
   const evt = {type, ...data};
-  if (eventWaiter) { eventWaiter(evt); eventWaiter = null; }
-  else eventQueue.push(evt);
+  if (eventWaiter && eventWaiter.accept(evt)) { const w = eventWaiter; eventWaiter = null; w.resolve(evt); return; }
+  eventQueue.push(evt);
+  if (eventQueue.length > EVENT_QUEUE_MAX) eventQueue.shift();
 }
-async function waitForEvent(timeoutMs) {
-  if (stopRequested && !onStopHandler) throw new Error('USER_STOP');
-  if (stopRequested && onStopHandler) { stopRequested = false; return {type: 'stop'}; }
-  if (eventQueue.length > 0) return eventQueue.shift();
-  return new Promise((resolve, reject) => {
-    eventWaiter = resolve;
+// Take the first queued event `accept` wants, waiting up to timeoutMs for one
+// (0 = wait for ever). Resolves {type: 'null'} on timeout.
+async function waitForEvent(timeoutMs, accept = () => true) {
+  if (stopRequested) throw new Error('USER_STOP');
+  const i = eventQueue.findIndex(accept);
+  if (i >= 0) return eventQueue.splice(i, 1)[0];
+  return new Promise(resolve => {
+    const w = {accept, resolve};
+    eventWaiter = w;
     if (timeoutMs > 0) setTimeout(() => {
-      if (eventWaiter === resolve) { eventWaiter = null; resolve({type: 'null'}); }
+      if (eventWaiter === w) { eventWaiter = null; resolve({type: 'null'}); }
     }, timeoutMs);
   });
 }
@@ -1835,7 +2115,6 @@ let globalVars = {};
 let dataStore = [];
 let dataPtr = 0;
 let funcDefs = {};
-let debugMode = false;   // toggled by the TRACE / NOTRACE statements
 const fnPtrTable = {};  // handle → function name, for @ operator
 let nextFnPtrHandle = 1;
 const executedGlobals = new Set(); // tracks which GLBL files have already been executed
@@ -1909,6 +2188,20 @@ function createButtonCtrl(id, {title = '', type = 1, state = 1, rect, wdef}) {
   return el;
 }
 
+// Apply an edit field's stored type, justification and font to its element.
+//   type   odd = framed; ((type-1) AND 12) <> 0 = static (see the _framed… equates)
+//   class  low two bits: 1 left, 2 centre, 3 right (higher bits are flags —
+//          Supermarket's "+4 makes it a numeric field")
+function styleEditField(el) {
+  if (!el) return;
+  const type = Number(el.dataset.type) || 1, just = (Number(el.dataset.just) || 1) & 3;
+  el.classList.toggle('framed', ((type - 1) & 1) === 0);
+  el.readOnly = ((type - 1) & 0b1100) !== 0;
+  el.style.textAlign = just === 2 ? 'center' : just === 3 ? 'right' : 'left';
+  el.style.fontFamily = MAC_FONTS[Number(el.dataset.font)] ?? MAC_FONTS[3];
+  el.style.setProperty('--ef-size', el.dataset.size || '12');
+}
+
 function destroyCtrl(id, wid) {
   const k = ctrlKey(id, wid);
   if (controlStore[k]) { controlStore[k].el?.remove(); delete controlStore[k]; }
@@ -1980,6 +2273,59 @@ async function resolveRect(arg, env) {
   if (Array.isArray(arr) && arr.length >= 4)
     return {top: +arr[0]||0, left: +arr[1]||0, bottom: +arr[2]||0, right: +arr[3]||0};
   return null;
+}
+
+// A QuickDraw Point is two words, v then h, and reaches the Toolbox the same
+// ways a Rect does: the first of two consecutive DIMmed scalars (CDraw's
+// `DIM My,Mx` for GETMOUSE), two consecutive array elements, or one long
+// holding v in its high word.
+async function readPoint(arg, env) {
+  if (!arg) return null;
+  if (arg.type === 'unary' && arg.operator === '@') return readPoint(arg.expression, env);
+  if (arg.type === 'variable') {
+    const grp = dimGroups[normVarName(arg.name)];
+    if (grp && grp.length >= 2) return {v: Number(readVar(env, grp[0])) || 0, h: Number(readVar(env, grp[1])) || 0};
+    const val = readVar(env, arg.name);
+    if (val && typeof val === 'object') return {v: Number(val.v ?? val.top) || 0, h: Number(val.h ?? val.left) || 0};
+    const n = Math.floor(Number(val)) || 0;
+    return {v: n >> 16, h: (n << 16) >> 16};
+  }
+  if (arg.type === 'callable') {
+    const arr = readArray(env, arg.name);
+    if (Array.isArray(arr)) {
+      const idx = await Promise.all((arg.args ?? []).map(x => x ? evalExpr(x, env) : 0));
+      let row = arr, base = subIdx(idx[0] ?? 0);
+      if (idx.length > 1 && Array.isArray(arr[base])) { row = arr[base]; base = subIdx(idx[1]); }
+      return {v: Number(row[base]) || 0, h: Number(row[base + 1]) || 0};
+    }
+  }
+  const n = Math.floor(Number(await evalExpr(arg, env))) || 0;
+  return {v: n >> 16, h: (n << 16) >> 16};
+}
+async function writePoint(arg, env, v, h) {
+  if (!arg) return;
+  if (arg.type === 'unary' && arg.operator === '@') return writePoint(arg.expression, env, v, h);
+  if (arg.type === 'variable') {
+    const grp = dimGroups[normVarName(arg.name)];
+    if (grp && grp.length >= 2) { writeVar(env, grp[0], v); writeVar(env, grp[1], h); return; }
+    writeVar(env, arg.name, ((v & 0xFFFF) << 16) | (h & 0xFFFF));
+    return;
+  }
+  if (arg.type === 'callable') {
+    const arr = readArray(env, arg.name);
+    if (!Array.isArray(arr)) return;
+    const idx = await Promise.all((arg.args ?? []).map(x => x ? evalExpr(x, env) : 0));
+    let row = arr, base = subIdx(idx[0] ?? 0);
+    if (idx.length > 1 && Array.isArray(arr[base])) { row = arr[base]; base = subIdx(idx[1]); }
+    row[base] = v; row[base + 1] = h;
+  }
+}
+// FN PTINRECT(pt, rect) — the point argument, not wherever the mouse is now.
+async function ptInRect(args, env) {
+  const p = await readPoint(args?.[0], env);
+  const r = await resolveRect(args?.[1], env);
+  if (!p || !r) return 0;
+  return (p.h >= r.left && p.h < r.right && p.v >= r.top && p.v < r.bottom) ? -1 : 0;
 }
 
 // Control placement wants [left, top, right, bottom].
@@ -2059,13 +2405,6 @@ function varPtrForString(key, s) {
 }
 
 
-function stmtSummary(stmt) {
-  switch (stmt.type) {
-    case 'label':         return `[${stmt.label}:]`;
-    case 'include':       return `↳ ${stmt.file ?? '(include)'}`;
-    default:              return null;
-  }
-}
 
 let penX = 0, penY = 0, penWidth = 1, penHeight = 1;
 let gfxPenX = 0, gfxPenY = 0;  // pen position after last text draw (for GETPEN)
@@ -2174,6 +2513,42 @@ function paintShape(bounds, draw) {
   ctx.fillStyle = p.colour; ctx.strokeStyle = p.colour;
   for (const d of draws) d(ctx);
 }
+// QuickDraw's pen is a penWidth x penHeight rectangle hanging below and to the
+// right of the pen position, and LineTo drags it along the path: the ink is
+// the hull of the pen at both ends. Stroking the path itself instead centres a
+// one-pixel line on a pixel boundary — smeared grey over two pixels — and puts
+// a thick line half a pen width up and to the left of where it belongs (CDraw's
+// 6-pixel axes, `PEN 6,6`, are drawn just left of and below the plot area).
+function penLine(c, x0, y0, x1, y1) {
+  const w = penWidth, h = penHeight;
+  const pts = [[x0, y0], [x0 + w, y0], [x0 + w, y0 + h], [x0, y0 + h],
+               [x1, y1], [x1 + w, y1], [x1 + w, y1 + h], [x1, y1 + h]];
+  pts.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+  const cross = (o, a, b) => (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  const half = list => {
+    const out = [];
+    for (const p of list) {
+      while (out.length >= 2 && cross(out[out.length - 2], out[out.length - 1], p) <= 0) out.pop();
+      out.push(p);
+    }
+    out.pop();
+    return out;
+  };
+  const hull = [...half(pts), ...half([...pts].reverse())];
+  c.beginPath();
+  hull.forEach(([x, y], i) => i ? c.lineTo(x, y) : c.moveTo(x, y));
+  c.closePath();
+  c.fill();
+}
+// FrameRect: the pen runs around the inside of the rectangle.
+function penFrame(c, left, top, right, bottom) {
+  const w = Math.min(penWidth, (right - left) / 2), h = Math.min(penHeight, (bottom - top) / 2);
+  c.fillRect(left, top, right - left, h);
+  c.fillRect(left, bottom - h, right - left, h);
+  c.fillRect(left, top + h, w, bottom - top - 2 * h);
+  c.fillRect(right - w, top + h, w, bottom - top - 2 * h);
+}
+
 // Bounding box of a list of [x,y] points, grown by the pen size.
 function pointBounds(pts, pad) {
   pad = (pad ?? Math.max(penWidth, penHeight)) + 2;
@@ -2186,7 +2561,22 @@ function pointBounds(pts, pad) {
   return {x: x0 - pad, y: y0 - pad, w: (x1 - x0) + pad * 2, h: (y1 - y0) + pad * 2};
 }
 let currentFg = '#000000', currentBg = '#ffffff';
-const spriteBuffer = {};
+const spriteBuffer = {};   // GET buffers: {img: ImageData, w, h (window px), S}
+// A GET buffer holds device pixels, so after the canvases change resolution it
+// is resampled — nearest neighbour, keeping it one-bit — before it is PUT.
+function spriteAtScale(key) {
+  const sp = spriteBuffer[key];
+  if (!sp || sp.S === CANVAS_SCALE) return sp;
+  const src = document.createElement('canvas');
+  src.width = sp.img.width; src.height = sp.img.height;
+  src.getContext('2d').putImageData(sp.img, 0, 0);
+  const dst = document.createElement('canvas');
+  dst.width = Math.max(1, dev(sp.w)); dst.height = Math.max(1, dev(sp.h));
+  const dctx = dst.getContext('2d', {willReadFrequently: true});
+  dctx.imageSmoothingEnabled = false;
+  dctx.drawImage(src, 0, 0, dst.width, dst.height);
+  return (spriteBuffer[key] = {...sp, img: dctx.getImageData(0, 0, dst.width, dst.height), S: CANVAS_SCALE});
+}
 let textSize = 12, textX = 1, textY = 12, textFont = 3;  // 3 = Geneva
 let printWidth = 0;   // WIDTH statement: chars per line before auto CR/LF (0 = off)
 let printTab = 16;    // DEF TAB: column width used by "," between PRINT items
@@ -2208,8 +2598,10 @@ let teKey = '';
 let pendingEditKey = null;   // {fieldId, key, el} awaiting the handler's verdict
 let onStopHandler = null;
 let handlerDepth = 0;
-let dialogOn = false;
+let dialogOn = false;   // set by the first DIALOG / MOUSE / MENU / TIMER / EVENT ON
 let mouseOn = false;
+let menuOn = false;
+let eventOn = false;
 let timerInterval = 0;
 let timerHandle = null;
 let timerOn = false; // gate: whether TIMER ON has been called
@@ -2260,17 +2652,14 @@ function setClipRect(r, wid) {
 }
 function applyClip(h) { setClipRect(regionStore[h] || null); }
 
+// The Stop button always stops. ON STOP does not intercept it: it names the
+// routine to run on the way out (PG:PRO's "PG:Stop" just disposes a handle),
+// and runProgram() calls it once after the run has unwound. Treating it as a
+// trap that resumes the program meant a PG:PRO program could not be stopped at
+// all — Supermarket kept running headless after Stop, and the next program's
+// Run was ignored because the first one still counted as running.
 async function maybeYield() {
-  if (stopRequested) {
-    if (onStopHandler && handlerDepth === 0) {
-      stopRequested = false;
-      handlerDepth++;
-      try { await callEventHandler(onStopHandler); }
-      finally { handlerDepth--; }
-    } else {
-      throw new Error('USER_STOP');
-    }
-  }
+  if (stopRequested) throw new Error('USER_STOP');
   if (++yieldCounter % 500 === 0) {
     await macrotask();
     await fireEventHandlers();
@@ -2301,54 +2690,58 @@ function macrotask() {
   return new Promise(r => { yieldWaiters.push(r); yieldChannel.port2.postMessage(0); });
 }
 
+// When does a queued event reach its ON … GOSUB handler? The manuals here do
+// not cover the Mac traps, so this is fitted to what the four programs need:
+//  • Not before the program has turned that trap on. PG:PRO installs its
+//    handlers, then builds the main window and runs Supermarket's FN Initialize,
+//    and only then enters its `MENU ON : DIALOG ON …` loop. Delivering earlier
+//    ran the window-update handler half way through Initialize, before the
+//    wells existed, so they were drawn without their limits.
+//  • Every `X ON` delivers what is pending right away — CDraw and PG:PRO
+//    open their traps for exactly one statement per pass of their main loop.
+//  • After that, `X OFF` does not stop delivery: MacPThy's Instructions window
+//    runs `DIALOG ON` once, then `WHILE Reading … DIALOG OFF … WEND`, and only
+//    its ON DIALOG handler can end that loop (close box → Reading=0).
+function trappedBy(evt) {
+  switch (evt.type) {
+    case 'menu':  return menuOn  ? onMenuHandler  : null;
+    case 'mouse': return mouseOn ? onMouseHandler : null;
+    case 'timer': return timerOn ? onTimerHandler : null;
+    case 'edit':  return (dialogOn || eventOn) ? onEditHandler : null;
+    case 'stop':  return null;
+    default:      return dialogOn ? onDialogHandler : null;   // buttons, fields, windows
+  }
+}
+
 let firingEvents = false;
 async function fireEventHandlers() {
-  // Only process events that were in the queue at the start of this call.
-  // New events added by setInterval or by event handlers themselves are left
-  // for the next fireEventHandlers() call so this function always terminates.
-  // Re-entrancy guard: if already inside an event handler, skip to avoid deep stacks.
+  // Not re-entrant: a handler that turns a trap on again must not recurse.
+  // Only the events queued now are handled; any a handler queues wait for the
+  // next pass, so this always terminates.
   if (firingEvents) return;
-  const limit = eventQueue.length;
-  if (limit === 0) return;
   firingEvents = true;
   try {
-    let processed = 0;
-    while (processed < limit && eventQueue.length > 0) {
-      processed++;
-      const evt = eventQueue[0];
-      let lbl = null, evtCode = 0;
-      // Menu and mouse events are not DIALOG events in ZBasic — they are
-      // delivered through ON MENU / ON MOUSE and read back with MENU()/MOUSE().
-      // Leave the DIALOG code at 0 ("no event") so a handler that happens to
-      // poll DIALOG(0) does not see a bogus window-update (5) or button (1).
-      if (evt.type === 'menu' && onMenuHandler) {
-        eventQueue.shift();
-        lastMenu = evt.menu; lastItem = evt.item;
-        lbl = onMenuHandler;
-        evtCode = 0;
-      } else if (evt.type === 'mouse' && onMouseHandler) {
-        eventQueue.shift();
-        lbl = onMouseHandler;
-        evtCode = 0;
-      } else if (evt.type === 'edit' && onEditHandler) {
-        eventQueue.shift();
-        currentEditField = evt.id ?? currentEditField;
-        lbl = onEditHandler;
-      } else if (evt.type === 'timer' && onTimerHandler) {
-        eventQueue.shift();
-        lbl = onTimerHandler;
-      } else if ((evt.type === 'button' || evt.type === 'editfield') && onDialogHandler) {
-        eventQueue.shift();
+    for (let budget = eventQueue.length; budget > 0; budget--) {
+      const i = eventQueue.findIndex(e => trappedBy(e));
+      if (i < 0) break;
+      const [evt] = eventQueue.splice(i, 1);
+      const lbl = trappedBy(evt);
+      // Menu and mouse events are not DIALOG events — they are read back with
+      // MENU()/MOUSE() — so DIALOG(0) stays 0 ("no event") inside their handlers.
+      let evtCode = 0;
+      if (evt.type === 'menu') { lastMenu = evt.menu; lastItem = evt.item; }
+      else if (evt.type === 'edit') {
+        // The keystroke is held back until the ON EDIT handler has seen it
+        // (and possibly rewritten it through TEKEY$).
+        currentEditField = evt.id;
+        teKey = evt.key;
+        pendingEditKey = {fieldId: evt.id, key: evt.ctrlKey, el: evt.el};
+      } else if (evt.type === 'button' || evt.type === 'editfield') {
         evtCode = evt.code ?? (evt.type === 'button' ? 1 : 2);
         lastDialogId = evt.id ?? lastDialogId;
         evt.ref = lastDialogId;
-        lbl = onDialogHandler;
-      } else if (onDialogHandler) {
-        eventQueue.shift();
+      } else if (evt.type !== 'mouse' && evt.type !== 'timer') {
         evtCode = evt.code ?? 0;
-        lbl = onDialogHandler;
-      } else {
-        break;
       }
       handlerDepth++;
       const prevCode = currentDialogEventCode;
@@ -2393,42 +2786,45 @@ function applyPendingEditKey() {
   teKey = '';
 }
 
-let _callHandlerCount = 0;
-// Runs the subroutine at `lbl` (a top-level label) until its RETURN.
-// Returns false if no such label exists, so callers can fall back.
-async function callEventHandler(lbl, env = globalVars, quiet = false) {
-  _callHandlerCount++;
-  if (debugMode && _callHandlerCount <= 20) console.log(`[callEH #${_callHandlerCount}] → "${lbl}"`);
-  const stmts = currentProgram;
-  const idx = stmts.findIndex(s => s && s.type === 'label' && canonLabel(s.label) === lbl);
-  if (idx < 0) { if (!quiet) console.log(`  label not found: "${lbl}"`); return false; }
-  if (debugMode) console.log(`▶ GOSUB → [${lbl}:]`);
-  let i = idx + 1;
-  while (i < stmts.length) {
+// Index of label `lbl` in `stmts`, searching forward from `from` first. The same
+// .INCL file can be included more than once (PG:PRO's @Header.INCL is pulled in
+// by several filters), and a GOTO inside the second copy has to land on that
+// copy's label rather than the first one.
+function findLabel(stmts, lbl, from = 0) {
+  const at = s => s && s.type === 'label' && canonLabel(s.label) === lbl;
+  for (let i = from; i < stmts.length; i++) if (at(stmts[i])) return i;
+  for (let i = 0; i < from && i < stmts.length; i++) if (at(stmts[i])) return i;
+  return -1;
+}
+
+// Run `stmts` from index `i` until a RETURN (or the end of the list): the body
+// of a subroutine. GOTOs move within the same list; a GOSUB that was not to a
+// top-level label (see the GOSUB statement) is looked for here too.
+async function runFrom(stmts, i, env) {
+  for (; i < stmts.length; i++) {
     await maybeYield();
     const s = stmts[i];
-    if (!s) { i++; continue; }
+    if (!s) continue;
     try {
-      const r = await execStmt(s, env);
-      if (r instanceof ReturnSignal) return true;
-    } catch(e) {
+      if (await execStmt(s, env) instanceof ReturnSignal) return true;
+    } catch (e) {
       if (e instanceof ReturnSignal) return true;
-      if (e instanceof GotoSignal) {
-        // Forward-first: same fix as gosub_inner — handles multiple @Header.INCL inclusions
-        const fwd = stmts.slice(i + 1).findIndex(x => x && x.type === 'label' && canonLabel(x.label) === e.label);
-        const li = fwd >= 0 ? i + 1 + fwd : stmts.findIndex(x => x && x.type === 'label' && canonLabel(x.label) === e.label);
-        if (li >= 0) { i = li + 1; continue; }
-        throw e;
-      }
-      if (e instanceof GosubSignal) {
-        await callEventHandler(e.label, env);
-        i++; continue;
-      }
-      throw e;
+      if (!(e instanceof GotoSignal || e instanceof GosubSignal)) throw e;
+      const li = findLabel(stmts, e.label, i + 1);
+      if (li < 0) throw e;
+      if (e instanceof GotoSignal) i = li;
+      else await runFrom(stmts, li + 1, env);
     }
-    i++;
   }
   return true;
+}
+
+// Run the subroutine at top-level label `lbl` — a GOSUB target or an ON …
+// GOSUB handler. Returns false if there is no such label.
+async function callEventHandler(lbl, env = globalVars, quiet = false) {
+  const idx = findLabel(currentProgram, lbl);
+  if (idx < 0) { if (!quiet) console.log(`  label not found: "${lbl}"`); return false; }
+  return runFrom(currentProgram, idx + 1, env);
 }
 
 class GotoSignal  { constructor(l) { this.label = l; } }
@@ -2453,10 +2849,29 @@ function labelOf(node) {
 // ── Run / Stop ────────────────────────────────────────────────
 function toggleRun() { if (running) stopProgram(); else runProgram(); }
 
+// Resolves when the current run has completely unwound. Anything that starts a
+// new run, or loads a different program, waits on it: a run that is merely
+// "asked to stop" still owns the windows and the event queue until it gets
+// there, and starting the next one alongside it left two interpreters fighting.
+let runFinished = Promise.resolve();
+
+// Timed waits (DELAY, WAIT) have to end early when Stop is pressed, or the run
+// cannot finish unwinding until the timer fires.
+const pendingSleeps = new Set();
+function sleepMs(ms) {
+  return new Promise(resolve => {
+    const done = () => { clearTimeout(t); pendingSleeps.delete(done); resolve(); };
+    const t = setTimeout(done, ms);
+    pendingSleeps.add(done);
+  });
+}
+
 async function runProgram() {
-  console.log('=== runProgram called, currentProgram length:', currentProgram?.length ?? 'null');
+  if (running) await stopProgram();
   if (!currentProgram || running) return;
   running = true; stopRequested = false;
+  let finishRun;
+  runFinished = new Promise(r => { finishRun = r; });
   const btnRun = document.getElementById('btn-run');
   btnRun.textContent = 'Stop'; btnRun.classList.add('running');
 
@@ -2467,14 +2882,14 @@ async function runProgram() {
   onMenuHandler = null; onDialogHandler = null; onMouseHandler = null;
   onTimerHandler = null; onEventHandler = null; onStopHandler = null;
   onEditHandler = null; teKey = ''; pendingEditKey = null;
-  handlerDepth = 0; dialogOn = false; mouseOn = false; timerOn = false; currentDialogEventCode = null; currentDialogEvent = null;
+  handlerDepth = 0; dialogOn = false; mouseOn = false; timerOn = false; menuOn = false; eventOn = false; currentDialogEventCode = null; currentDialogEvent = null;
   if (timerHandle) { clearInterval(timerHandle); timerHandle = null; } timerInterval = 0;
   Object.keys(regionStore).forEach(k => delete regionStore[k]);
   rgnCollect = null; savedPenState = null;
   nextRegionHandle = 1000;
   Object.keys(windowClip).forEach(k => delete windowClip[k]);
   Object.keys(teHandleMap).forEach(k => delete teHandleMap[k]);
-  fakeMemBlocks.length = 0; nextFakeAddr = 0x10000; _wMgrPort = 0;
+  fakeMemBlocks.length = 0; nextFakeAddr = 0x10000; _wMgrPort = 0; resHandles = new Map(); varMem = null;
   Object.keys(varPtrBlocks).forEach(k => delete varPtrBlocks[k]); varPtrAnon = 0;
   Object.keys(dimGroups).forEach(k => delete dimGroups[k]);
   // Mac OS low-memory globals block (addresses 0x0000–0x0FFF).
@@ -2501,9 +2916,11 @@ async function runProgram() {
   mousePressX = 0; mousePressY = 0; mouseReleaseX = 0; mouseReleaseY = 0;
   paramText = ['', '', '', ''];
   if (alertResolve) alertResolve(1);   // an alert left up by the previous run
+  openFiles.clear(); defOpen = 'TEXT????'; errorTrap = null;
 
   // Reset per-run state
   Object.keys(pictHandleMap).forEach(k => delete pictHandleMap[k]);
+  Object.keys(spriteBuffer).forEach(k => delete spriteBuffer[k]);
 
   // Inject ZBasic/Mac/PG:PRO built-in constants (normally from _aplIncl + PG:PRO runtime binary)
   Object.assign(globalVars, {
@@ -2558,10 +2975,16 @@ async function runProgram() {
     '_activewnd': -101, '_outputwnd': -102, '_outputwclass': -103,
     '_wndpointer': -104, '_efnum': -105, '_lastefnum': -106,
     '_selstart': -107, '_selend': -108, '_eftextlen': -109,
-    // Edit field border/style
-    '_noframed': 0, '_framed': 1, '_statnoframed': 2, '_statframed': 3,
-    // Justification
-    '_centerjust': 0, '_leftjust': -1, '_rightjust': 1,
+    // EDIT FIELD types. PG:PRO's own test for an editable field is
+    // `((type-1) AND &X1100) = 0` ("not a static or gray field"), so 1-4 are
+    // the editable kinds and 5 upwards the static ones; odd types are framed.
+    '_framed': 1, '_noframed': 2, '_framednocr': 3, '_noframednocr': 4,
+    '_statframed': 5, '_statnoframed': 6,
+    // EDIT FIELD justification (low two bits of the last argument). PG:PRO's
+    // Style menu sets it with `EDIT FIELD …,,,,gWhichItem - _justifyItem + 1`
+    // and Supermarket's items 12/13/14 are Left/Center/Right, so these are
+    // 1/2/3. (TEXTBOX takes TextEdit's own 0/1/-1 coding instead.)
+    '_leftjust': 1, '_centerjust': 2, '_rightjust': 3,
     // Resource handle flags
     '_resource%': 0x20, '_respurgeable%': 0x40,
     // Misc Mac
@@ -2584,6 +3007,8 @@ async function runProgram() {
     try { globalVars[normVarName(eq.name)] = await evalExpr(eq.value, globalVars); }
     catch(e) { console.warn(`equate ${eq.name}: ${e.message ?? e}`); }
   }
+  await layoutVariables(currentProgram);
+  CANVAS_SCALE = targetCanvasScale();   // no windows yet: pick it before the first
   getOrCreateWindow(1, null, 512, 342);
   setOutputWindow(1);
 
@@ -2598,16 +3023,32 @@ async function runProgram() {
     else console.error(e);
   }
 
-  running = false;
+  // ON STOP names the program's clean-up routine; run it once on the way out.
+  // A second press of Stop still interrupts it.
+  if (onStopHandler) {
+    const lbl = onStopHandler;
+    onStopHandler = null;
+    stopRequested = false;
+    try { await callEventHandler(lbl, globalVars, true); } catch (e) { /* ending anyway */ }
+  }
+  if (timerHandle) { clearInterval(timerHandle); timerHandle = null; }
+  await closeAllFiles();   // a file the program left open still gets written
+
+  running = false; stopRequested = false;
   btnRun.textContent = 'Run'; btnRun.classList.remove('running');
+  finishRun();
 }
 
+// Ask the running program to stop; the promise resolves once it has.
 function stopProgram() {
+  if (!running) return Promise.resolve();
   stopRequested = true;
-  if (eventWaiter) { const w = eventWaiter; eventWaiter = null; w({type: 'stop'}); }
-  // A modal alert is the one place the interpreter parks without an event
-  // waiter, so Stop has to dismiss it or the run can never be interrupted.
+  if (eventWaiter) { const w = eventWaiter; eventWaiter = null; w.resolve({type: 'stop'}); }
+  // A modal alert or file dialog is the one place the interpreter parks without
+  // an event waiter, so Stop has to dismiss it or the run can never be interrupted.
   if (alertResolve) alertResolve(1);
+  for (const wake of [...pendingSleeps]) wake();
+  return runFinished;
 }
 
 // ── Collect pass (DATA + fn defs) ─────────────────────────────
@@ -2640,75 +3081,31 @@ function evalConstant(n) {
 }
 
 // ── Block executor ────────────────────────────────────────────
+// A block is a statement list: the program, a function body, a loop or IF body.
+// A GOTO or a non-top-level GOSUB whose label is not in this block propagates
+// out to the enclosing one.
 async function execBlock(stmts, env) {
   if (!stmts) return;
-  let i = 0;
-  while (i < stmts.length) {
+  for (let i = 0; i < stmts.length; i++) {
     await maybeYield();
     const stmt = stmts[i];
-    if (!stmt) { i++; continue; }
+    if (!stmt) continue;
     try {
       const r = await execStmt(stmt, env);
       if (r instanceof ReturnSignal) return r;
-    } catch(e) {
-      if (e instanceof GotoSignal) {
-        const idx = stmts.findIndex(s => s && s.type === 'label' && canonLabel(s.label) === e.label);
-        if (idx >= 0) { if (debugMode) console.log(`▶ GOTO [${e.label}:]`); i = idx + 1; continue; }
-        throw e;
-      }
-      if (e instanceof GosubSignal) {
-        const idx = stmts.findIndex(s => s && s.type === 'label' && canonLabel(s.label) === e.label);
-        if (idx >= 0) {
-          if (debugMode) console.log(`[execBlock GOSUB] → "${e.label}" at idx=${idx}`);
-          let j = idx + 1;
-          let _gotoCount = 0;
-          gosub_inner: while (j < stmts.length) {
-            await maybeYield();
-            const s2 = stmts[j];
-            if (!s2) { j++; continue; }
-            try {
-              const r2 = await execStmt(s2, env);
-              if (r2 instanceof ReturnSignal) break;
-            } catch(e2) {
-              if (e2 instanceof ReturnSignal) { if (debugMode) console.log(`[gosub_inner] RETURN at j=${j}`); break; }
-              if (e2 instanceof GotoSignal) {
-                // Search forward from j first: handles multiple inclusions of the same file
-                // (e.g. @Header.INCL included by both PG PRO.INCL and PICT.FLTR defines
-                // "After @Header" twice; the GOTO inside PICT.FLTR's copy must land on
-                // PICT.FLTR's own label, not the earlier one from PG PRO.INCL).
-                const fwd = stmts.slice(j + 1).findIndex(s => s && s.type === 'label' && canonLabel(s.label) === e2.label);
-                const li = fwd >= 0 ? j + 1 + fwd : stmts.findIndex(s => s && s.type === 'label' && canonLabel(s.label) === e2.label);
-                if (li >= 0) {
-                  _gotoCount++;
-                  if (debugMode && (_gotoCount <= 60 || _gotoCount % 200 === 0)) console.log(`[gosub_inner GOTO #${_gotoCount}] "${e2.label}" idx=${li}, from j=${j}`);
-                  if (debugMode && _gotoCount === 61) console.log('[gosub_inner] suppressing further GOTO logs (every 200th shown)');
-                  j = li + 1; continue gosub_inner;
-                }
-                throw e2;
-              }
-              if (e2 instanceof GosubSignal) {
-                const ni = currentProgram.findIndex(s => s && s.type === 'label' && canonLabel(s.label) === e2.label);
-                if (ni >= 0) { if (debugMode) console.log(`[gosub_inner nested GOSUB] "${e2.label}" ni=${ni}`); await callEventHandler(e2.label); j++; continue gosub_inner; }
-                throw e2;
-              }
-              throw e2;
-            }
-            j++;
-          }
-          i++; continue;
-        }
-        throw e;
-      }
-      throw e;
+    } catch (e) {
+      if (!(e instanceof GotoSignal || e instanceof GosubSignal)) throw e;
+      const li = findLabel(stmts, e.label, i + 1);
+      if (li < 0) throw e;
+      if (e instanceof GotoSignal) i = li;
+      else await runFrom(stmts, li + 1, env);
     }
-    i++;
   }
 }
 
 // ── Statement dispatcher ──────────────────────────────────────
 async function execStmt(stmt, env) {
   if (!stmt) return;
-  if (debugMode) { const s = stmtSummary(stmt); if (s) console.log(`▶ ${s}`); }
   switch (stmt.type) {
     case 'assign':        return execAssign(stmt, env);
     case 'print':         return execPrint(stmt, env);
@@ -2733,12 +3130,17 @@ async function execStmt(stmt, env) {
         // Start the timer interval now; events are gated by timerOn flag
         if (timerHandle) clearInterval(timerHandle);
         const ms = timerInterval > 0 ? timerInterval : 1000;
-        timerHandle = setInterval(() => { if (running && timerOn) pushEvent('timer'); }, ms);
+        timerHandle = setInterval(() => {
+          if (running && onTimerHandler && !eventQueue.some(e => e.type === 'timer')) pushEvent('timer');
+        }, ms);
       }
       else if (stmt.event === 'EDIT') onEditHandler = lbl;
       else if (stmt.event === 'BREAK') { /* command-period trap — no keyboard equivalent here */ }
       else if (stmt.event === 'EVENT') onEventHandler = lbl;
       else if (stmt.event === 'STOP') onStopHandler = lbl;
+      // ON ERROR GOSUB 65535: the program checks ERROR itself; ON ERROR RETURN
+      // hands disk errors back to ZBasic (see diskError).
+      else if (stmt.event === 'ERROR') errorTrap = stmt.cmd === 'RETURN' ? null : lbl === '65535' ? '' : lbl;
       return;
     }
     case 'procedureCall': return execProcCall(stmt, env);
@@ -2764,6 +3166,8 @@ async function execStmt(stmt, env) {
       // demands whitespace around the "=" and this rule does not.
       if (dk === 'mouse' && stmt.arg)
         msMouseSyntax = Number(await evalExpr(stmt.arg, env)) !== 0;
+      // DEF OPEN "typecrea" — the type and creator of the files OPEN creates.
+      if (dk === 'open' && stmt.arg) defOpen = String(await evalExpr(stmt.arg, env)).padEnd(8, '?').slice(0, 8);
       if (dk === 'tab' && stmt.arg)
         printTab = Math.max(1, Math.floor(Number(await evalExpr(stmt.arg, env))) || 16);
       // DEF SHADOWBOX(rect) comes from the ZMover library rather than ZBasic
@@ -2788,6 +3192,33 @@ async function execStmt(stmt, env) {
           ctx.fillRect(r.right + 1, r.top + 1, sh, h + 2);     // shadow at the right
         }
       }
+      // DEF CBOX(rect, s$) — from the same library: s$ centred in the rect
+      // (Supermarket's source comments every call "center justify"). It is the
+      // "Items" / "Next Aisle" caption under a checkout's limit field, so
+      // without it nothing showed that a limit had been set.
+      if (dk === 'cbox' && ctx && stmt.args?.length >= 2) {
+        const r = await resolveRect(stmt.args[0], env);
+        if (r) { drawTextBox(String(await evalExpr(stmt.args[1], env) ?? ''), r, 1); showCanvas(); }
+      }
+      // PG:PRO runtime helpers.
+      //   DEF CHECKONEITEM(menu, item)  check `item` and clear the rest (0 clears all)
+      //   DEF BLOCKFILL(ptr, len, byte) fill memory
+      //   DEF DISPOSEH(handle)          free a handle (nothing to free here)
+      if (dk === 'checkoneitem' && stmt.args?.length >= 2) {
+        const mid = Math.floor(Number(await evalExpr(stmt.args[0], env))) || 0;
+        const item = Math.floor(Number(await evalExpr(stmt.args[1], env))) || 0;
+        const m = menuDefs[mid];
+        if (m) {
+          for (const [iid, it] of Object.entries(m.items)) it.checked = Number(iid) === item;
+          renderMenuBar();
+        }
+      }
+      if (dk === 'blockfill' && stmt.args?.length >= 3) {
+        const ptr = Math.floor(Number(await evalExpr(stmt.args[0], env))) || 0;
+        const len = Math.max(0, Math.floor(Number(await evalExpr(stmt.args[1], env))) || 0);
+        const val = (Math.floor(Number(await evalExpr(stmt.args[2], env))) || 0) & 0xFF;
+        if (ptr && len) fakeWriteBytes(ptr, new Uint8Array(len).fill(val));
+      }
       return;
     }
     case 'label': case 'data': case 'comment': case 'remark': return;  // not executable
@@ -2803,12 +3234,17 @@ async function execStmt(stmt, env) {
 // Marks a scope created for a LOCAL FN, whose undeclared variables stay local.
 const LOCAL_SCOPE = Symbol('localScope');
 
-function makeLocalScope(fn, env) {
-  // LOCAL FN gets a fresh scope chained to the globals; LONG FN shares the
-  // caller's, since its variables are global in ZBasic.
-  const isLocal = fn.type === 'localFunction';
-  const scope = Object.create(isLocal ? globalVars : env);
-  if (isLocal) scope[LOCAL_SCOPE] = true;
+// "All ZBasic variables are global" (manual, "Global versus local variables"):
+// a LONG FN's parameters are ordinary globals that the call assigns, which is
+// why every LONG FN here gives its parameters names of their own (PushVal,
+// GFFont, Wnd2Format …). So a LONG FN runs in the global scope — not in its
+// caller's, which inside a LOCAL FN would have exposed that FN's locals. Only a
+// LOCAL FN (ZBasic Mac) gets a scope of its own; a one-line DEF FN keeps its
+// parameters to itself too.
+function makeLocalScope(fn) {
+  if (fn.type === 'function') return globalVars;
+  const scope = Object.create(globalVars);
+  if (fn.type === 'localFunction') scope[LOCAL_SCOPE] = true;
   return scope;
 }
 
@@ -3078,7 +3514,7 @@ async function execAssign(stmt, env) {
     const idxs = (await Promise.all(stmt.idx.map(x => evalExpr(x, env)))).map(subIdx);
     if (!Array.isArray(arr)) {
       // An array used without DIM is implicitly dimensioned to 10 per dimension.
-      arr = makeArray(new Array(idxs.length).fill(10));
+      arr = makeArray(new Array(idxs.length).fill(10), name.endsWith('$') ? '' : 0);
       defineArray(env, name, arr);
     }
     let a = arr;
@@ -3102,17 +3538,36 @@ async function execAssign(stmt, env) {
   writeVar(env, name, val);
 }
 
+// Stores a value the way an assignment to `node` would: INPUT, READ and
+// FILES$'s volume argument name their targets like the left side of an "=".
+function storeInto(node, value, env) {
+  return execAssign({type: 'assign', name: node.name, fields: node.fields ?? [],
+    idx: node.args?.length ? node.args : null, value: {type: 'literal', value}}, env);
+}
+
 // ── dim ───────────────────────────────────────────────────────
 async function execDim(stmt, env) {
-  // `DIM T,L,B,R` puts four scalars next to each other; programs then pass the
-  // first as a Rect. Remember the grouping so resolveRect() can find the rest.
-  const scalars = stmt.args.filter(a => !(a.dims && a.dims.length));
-  if (scalars.length >= 4) dimGroups[normVarName(scalars[0].name)] = scalars.map(a => normVarName(a.name));
+  // `DIM T,L,B,R` puts scalars next to each other in memory, and programs pass
+  // one of them where the Toolbox wants a Rect (four words) or a Point (two):
+  // Grglflx declares `DIM Ft,Fl,Fb,Fr,Fy,Fx` and hit-tests the point Fy,Fx
+  // against the rect Ft. So every member of a run of plain numeric scalars
+  // records the variables that follow it. An array, a string or a sized block
+  // (`DIM r;8`) sits elsewhere in memory and ends the run.
+  let run = [];
+  const flush = () => {
+    for (let i = 0; i + 1 < run.length; i++) dimGroups[run[i]] = run.slice(i);
+    run = [];
+  };
+  for (const a of stmt.args) {
+    if ((a.dims && a.dims.length) || a.size != null || String(a.name).endsWith('$')) { flush(); continue; }
+    run.push(normVarName(a.name));
+  }
+  flush();
   for (const a of stmt.args) {
     const name = a.name;
     if (a.dims && a.dims.length > 0) {
       const sizes = await Promise.all(a.dims.map(d => evalExpr(d, env)));
-      defineArray(env, name, makeArray(sizes));
+      defineArray(env, name, makeArray(sizes, name.endsWith('$') ? '' : 0));
     } else {
       // DIM without a size is just a declaration — give it the type's zero value
       // (not null, which would print as "null") and leave existing values alone.
@@ -3121,40 +3576,34 @@ async function execDim(stmt, env) {
     }
   }
 }
-function makeArray(sizes) {
+function makeArray(sizes, zero) {
   const sz = (sizes[0] || 0) + 1;
-  if (sizes.length === 1) return new Array(sz).fill(0);
-  return Array.from({length: sz}, () => makeArray(sizes.slice(1)));
+  if (sizes.length === 1) return new Array(sz).fill(zero);
+  return Array.from({length: sz}, () => makeArray(sizes.slice(1), zero));
 }
 
 // ── print ─────────────────────────────────────────────────────
-// PRINT USING formatstring; numeric expression
-// Supported format symbols (Standard Reference): # digit placeholder, . decimal
-// point, , thousands separator, $ leading dollar sign, + always-signed,
-// - sign only when negative. Digits to the right of the last # are rounded.
+// PRINT USING format; number (Standard Reference, "PRINT USING"):
+//   #  a digit position        .  the decimal point      ,  group thousands
+//   $  leading dollar sign     *  fill the field with *  +  always show the sign
+// The sign floats against the number inside the field rather than sitting at
+// its left edge: MacPThy's cursor readout prints Y with "##.#", and putting the
+// minus before the padding showed -0.3 as "- 0.3". Characters around the field
+// are printed as they stand ("%###.#", "###=").
 function formatUsing(fmt, value) {
   const f = String(fmt ?? '');
-  const m = f.match(/[#,]*\.?#*/g)?.filter(s => s.length)?.[0];
+  const m = f.match(/[$*+\-]*[#,]*\.?#*/g)?.find(x => x.includes('#'));
   if (!m) return String(value);
-  const num = Number(value) || 0;
-  const dot = m.indexOf('.');
-  const decimals = dot < 0 ? 0 : m.length - dot - 1;
-  const intPlaces = (dot < 0 ? m : m.slice(0, dot)).replace(/[^#]/g, '').length;
-  const grouped = m.slice(0, dot < 0 ? m.length : dot).includes(',');
-
-  let body = Math.abs(num).toFixed(decimals);
-  if (grouped) {
-    const [ip, fp] = body.split('.');
-    body = ip.replace(/\B(?=(\d{3})+(?!\d))/g, ',') + (fp ? '.' + fp : '');
-  }
-  // Right-align the integer part in the width the format asked for.
-  const ipLen = body.split('.')[0].replace(/,/g, '').length;
-  if (ipLen < intPlaces) body = ' '.repeat(intPlaces - ipLen) + body;
-
-  const wantsDollar = f.includes('$');
-  const plusSign = f.includes('+');
-  let sign = num < 0 ? '-' : (plusSign ? '+' : '');
-  return (wantsDollar ? '$' : '') + sign + body;
+  const at = f.indexOf(m), num = Number(value) || 0;
+  const [intSpec, fracSpec = null] = m.split('.');
+  const decimals = fracSpec === null ? 0 : fracSpec.length;
+  let [ip, fp] = Math.abs(num).toFixed(decimals).split('.');
+  if (intSpec.includes(',')) ip = ip.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+  const sign = num < 0 ? '-' : intSpec.includes('+') ? '+' : '';
+  const lead = sign + (intSpec.includes('$') ? '$' : '') + ip;
+  const width = intSpec.replace(/[*]/g, '').length;   // every other symbol holds a place
+  const body = lead.padStart(width, intSpec.includes('*') ? '*' : ' ') + (fracSpec === null ? '' : '.' + fp);
+  return f.slice(0, at) + body + f.slice(at + m.length);
 }
 
 // Character cell metrics used by PRINT / PRINT@ / HTAB / VTAB.
@@ -3197,7 +3646,12 @@ async function execPrintInner(stmt, env) {
   const text = parts.join('');
   const mode = stmt.mode;
 
-  if (mode.type === '#') { console.log(text); return; }
+  // PRINT #n puts on the file exactly what PRINT would put on the screen.
+  if (mode.type === '#') {
+    const num = Math.trunc(Number(await evalExpr(mode.chan, env)));
+    await fileWrite(num, strToMacRoman(stmt.trailing ? text : text + '\r'));
+    return;
+  }
   if (mode.type === '%') {
     // PRINT %(x,y) — pixel coordinates; leaves the text cursor after the string.
     const x = Number(await evalExpr(mode.coord.x, env)) || 0;
@@ -3246,7 +3700,7 @@ function scrollTextIfNeeded() {
   const h = wdef.logH ?? 342;
   if (textY <= h) return;
   const dy = lineH();
-  const img = ctx.getImageData(0, dy * CANVAS_SCALE, wdef.canvas.width, wdef.canvas.height);
+  const img = ctx.getImageData(0, dev(dy), wdef.canvas.width, wdef.canvas.height);
   ctx.fillStyle = currentBg;
   ctx.fillRect(0, 0, wdef.logW ?? 512, h);
   ctx.putImageData(img, 0, 0);
@@ -3340,8 +3794,9 @@ async function execSysCall(stmt, env) {
   // and the update event that `D0=DIALOG(0)` waits for never arrived — the
   // Instructions window came up blank and the program stopped dead.
   // (EDIT FIELD reads the channel node out of args[0] itself, so it is left alone.)
+  // `INPUT #1, X` is the same: a file read, not a prompt.
   if (!stmt.chan && args[0] && args[0].type === 'channel' &&
-      (cmd === 'WINDOW' || cmd === 'BUTTON' || cmd === 'SCROLL')) {
+      (cmd === 'WINDOW' || cmd === 'BUTTON' || cmd === 'SCROLL' || cmd === 'INPUT')) {
     stmt = Object.assign({}, stmt, {chan: args[0].n});
     args = args.slice(1);
   }
@@ -3350,6 +3805,11 @@ async function execSysCall(stmt, env) {
   async function n(i)  { return Number(await a(i)) || 0; }
   async function s(i)  { return String(await a(i) ?? ''); }
   async function allN() { return Promise.all(args.map((x,i) => x ? n(i) : null)); }
+  // A file number, written "#n" or "n".
+  async function fileNum(i) {
+    const x = args[i]?.type === 'channel' ? args[i].n : args[i];
+    return x ? Math.trunc(Number(await evalExpr(x, env))) : 0;
+  }
 
   switch(cmd) {
     // ── graphics ────────────────────────────────────────────
@@ -3424,7 +3884,7 @@ async function execSysCall(stmt, env) {
         const legs = [];
         for (let i = 1; i < pts.length; i++) {
           const [ax, ay] = pts[i - 1], [bx, by] = pts[i];
-          legs.push(c => { c.lineWidth = penWidth; c.beginPath(); c.moveTo(ax, ay); c.lineTo(bx, by); c.stroke(); });
+          legs.push(c => penLine(c, ax, ay, bx, by));
         }
         paintShape(pointBounds(pts), legs);
         return;
@@ -3477,7 +3937,7 @@ async function execSysCall(stmt, env) {
       for (let i = 1; i < ops.length; i++) {
         if (ops[i][0] !== 'l') continue;
         const [, ax, ay] = ops[i - 1], [, bx, by] = ops[i];
-        legs.push(c => { c.lineWidth = penWidth; c.beginPath(); c.moveTo(ax, ay); c.lineTo(bx, by); c.stroke(); });
+        legs.push(c => penLine(c, ax, ay, bx, by));
       }
       paintShape(pointBounds(ops.map(o => [o[1], o[2]])), legs);
       return;
@@ -3496,7 +3956,7 @@ async function execSysCall(stmt, env) {
       paintShape(pointBounds([[x1, y1], [x2, y2]]), c => {
         c.lineWidth = penWidth;
         if (stmt.keyword === 'FILL') c.fillRect(x1, y1, x2 - x1, y2 - y1);
-        else c.strokeRect(x1, y1, x2 - x1, y2 - y1);
+        else penFrame(c, Math.min(x1, x2), Math.min(y1, y2), Math.max(x1, x2), Math.max(y1, y2));
       });
       return;
     }
@@ -3583,7 +4043,7 @@ async function execSysCall(stmt, env) {
       const dh = await n(0), dv = await n(1);
       const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
       ctx.clearRect(0, 0, canvas.width / CANVAS_SCALE, canvas.height / CANVAS_SCALE);
-      ctx.putImageData(img, dh * CANVAS_SCALE, dv * CANVAS_SCALE);
+      ctx.putImageData(img, dev(dh), dev(dv));
       return;
     }
 
@@ -3599,7 +4059,9 @@ async function execSysCall(stmt, env) {
       const w = Math.abs(x2 - x1) + 1, h = Math.abs(y2 - y1) + 1;
       if (a1.type === 'callable' || a1.type === 'variable') {
         const idx = a1.args?.[0] ? Math.floor(Number(await evalExpr(a1.args[0], env))) : 0;
-        spriteBuffer[`${a1.name}_${idx}`] = ctx.getImageData(sx * CANVAS_SCALE, sy * CANVAS_SCALE, w * CANVAS_SCALE, h * CANVAS_SCALE);
+        const x0 = dev(sx), y0 = dev(sy);
+        spriteBuffer[`${a1.name}_${idx}`] = {
+          img: ctx.getImageData(x0, y0, dev(sx + w) - x0, dev(sy + h) - y0), w, h, S: CANVAS_SCALE};
       }
       return;
     }
@@ -3626,13 +4088,14 @@ async function execSysCall(stmt, env) {
       const isXor = modeWord === null || modeWord === 'XOR';
       if (a1.type === 'callable' || a1.type === 'variable') {
         const idx = a1.args?.[0] ? Math.floor(Number(await evalExpr(a1.args[0], env))) : 0;
-        const imgData = spriteBuffer[`${a1.name}_${idx}`];
+        const sprite = spriteAtScale(`${a1.name}_${idx}`);
+        const imgData = sprite?.img;
         if (imgData) {
           if (isXor) {
             // 1-bit XOR, as on the Mac: ink XOR ink = no ink, so PUTting a
             // sprite over itself erases it. Doing this on raw RGBA would be
             // backwards (white 255 ^ 255 = 0 = black), so compare ink instead.
-            const sdx = dx * CANVAS_SCALE, sdy = dy * CANVAS_SCALE;
+            const sdx = dev(dx), sdy = dev(dy);
             const w = imgData.width, h = imgData.height;
             const bg = ctx.getImageData(sdx, sdy, w, h);
             const sp = imgData.data, bg_ = bg.data;
@@ -3644,7 +4107,7 @@ async function execSysCall(stmt, env) {
             }
             ctx.putImageData(bg, sdx, sdy);
           } else {
-            ctx.putImageData(imgData, dx * CANVAS_SCALE, dy * CANVAS_SCALE);
+            ctx.putImageData(imgData, dev(dx), dev(dy));
           }
         }
       }
@@ -3655,8 +4118,10 @@ async function execSysCall(stmt, env) {
       // LOCAL var1, var2, ... — shadow parent-scope variables in this env
       for (const arg of args) {
         if (!arg) continue;
-        const name = arg.name;
-        if (name && !Object.prototype.hasOwnProperty.call(env, name))
+        // Stored under the same normalised name readVar() looks up first;
+        // under the raw `x%` a read of x% went straight past it to a global x.
+        const name = arg.name && normVarName(arg.name);
+        if (name && env !== globalVars && !Object.prototype.hasOwnProperty.call(env, name))
           env[name] = name.endsWith('$') ? '' : 0;
       }
       return;
@@ -3762,22 +4227,21 @@ async function execSysCall(stmt, env) {
 
     // ── data ─────────────────────────────────────────────────
     case 'READ': {
-      for (const arg of args) {
-        if (!arg) continue;
-        const val = dataStore[dataPtr++] ?? null;
-        if (arg.type === 'variable') {
-          writeVar(env, arg.name, val);
-        } else if ((arg.type === 'callable' || arg.type === 'subscript') && arg.name) {
-          // Array subscript: READ C$(M,C)
-          const arr = env[arg.name] ?? globalVars[arg.name];
-          if (Array.isArray(arr) && arg.args?.length > 0) {
-            const idxs = await Promise.all(arg.args.map(x => x ? evalExpr(x, env) : 0));
-            let a = arr;
-            for (let d = 0; d < idxs.length - 1; d++) a = a[idxs[d]] || (a[idxs[d]] = []);
-            a[idxs[idxs.length - 1]] = val;
-          }
-        }
+      if (stmt.keyword === 'FILE') {
+        // READ FILE #n, address, length — raw bytes into memory.
+        const bytes = await fileRead(await fileNum(0), Math.max(0, Math.floor(await n(2))));
+        if (bytes?.length) fakeWriteBytes(Math.floor(await n(1)), bytes);
+        return;
       }
+      if (stmt.keyword) { console.log(`unsupported: READ ${stmt.keyword}`); return; }
+      for (const arg of args) if (arg) await storeInto(arg, dataStore[dataPtr++] ?? null, env);
+      return;
+    }
+    // WRITE FILE #n, address, length — raw bytes out of memory.
+    case 'WRITE': {
+      if (stmt.keyword !== 'FILE') { console.log(`unsupported: WRITE ${stmt.keyword ?? ''}`); return; }
+      const num = await fileNum(0);
+      await fileWrite(num, fakeReadBytes(Math.floor(await n(1)), Math.max(0, Math.floor(await n(2)))));
       return;
     }
     // RESTORE [expression] — reset the DATA pointer to the first item, or to the
@@ -3816,11 +4280,10 @@ async function execSysCall(stmt, env) {
         await fireEventHandlers();
         return;
       }
-      if (stmt.keyword === 'OFF') { dialogOn = false; return; }
+      if (stmt.keyword === 'OFF') return;   // see trappedBy()
       const nn = await n(0);
       if (nn === 0) {
         const evt = await waitForEvent(0);
-        if (debugMode) console.log(`▶ DIALOG 0 got event: ${evt?.type ?? 'null'}`);
         if (evt && evt.type === 'menu' && onMenuHandler) {
           lastMenu = evt.menu; lastItem = evt.item;
           await callEventHandler(onMenuHandler);
@@ -3828,9 +4291,9 @@ async function execSysCall(stmt, env) {
           await callEventHandler(onMouseHandler);
         } else if (evt && evt.type === 'timer' && onTimerHandler) {
           await callEventHandler(onTimerHandler);
-        } else if (evt && evt.type === 'stop' && onStopHandler) {
-          await callEventHandler(onStopHandler);
-        } else if (evt && evt.type !== 'stop' && onDialogHandler) {
+        } else if (evt && evt.type === 'stop') {
+          throw new Error('USER_STOP');
+        } else if (evt && onDialogHandler) {
           await callEventHandler(onDialogHandler);
         }
       } else if (args.length >= 2) {
@@ -3841,6 +4304,17 @@ async function execSysCall(stmt, env) {
     }
 
     case 'INPUT': {
+      if (stmt.chan) {
+        // INPUT #n, var, var… — numeric variables take the item's value.
+        const num = Math.trunc(Number(await evalExpr(stmt.chan, env)));
+        for (const target of args) {
+          if (!target) continue;
+          const item = await fileInputItem(num);
+          if (item === null) return;
+          await storeInto(target, /\$$/.test(target.name ?? '') ? item : (parseFloat(item) || 0), env);
+        }
+        return;
+      }
       let prompt = '';
       let varIdx = args.length - 1;
       if (args.length >= 2 && args[0] && args[0].type === 'literal') {
@@ -3848,26 +4322,25 @@ async function execSysCall(stmt, env) {
       }
       const txt = await promptUser('Input', prompt) || '';
       const target = args[varIdx];
-      if (target && target.type === 'variable') {
-        // String variables keep the raw text; numeric ones are converted.
-        const v = target.name.endsWith('$') ? txt : (parseFloat(txt) || 0);
-        writeVar(env, target.name, v);
-      }
+      // String variables keep the raw text; numeric ones are converted.
+      if (target?.name) await storeInto(target, target.name.endsWith('$') ? txt : (parseFloat(txt) || 0), env);
       return;
     }
 
-    case 'BEEP': {
-      try {
-        const ac = new (window.AudioContext || window.webkitAudioContext)();
-        const osc = ac.createOscillator();
-        osc.connect(ac.destination); osc.frequency.value = 880;
-        osc.start(); osc.stop(ac.currentTime + 0.08);
-      } catch(e) {}
+    case 'BEEP': tone(880, 80); return;
+    // SOUND frequency, duration [, volume] — Hz and milliseconds (Standard
+    // Reference); the Mac's third argument is the volume, 0-255. It plays out
+    // before the program goes on, so a run of SOUNDs is a tune, not a chord.
+    case 'SOUND': {
+      const ms = Math.max(0, await n(1));
+      tone(await n(0), ms, args[2] ? (await n(2)) / 255 : 1);
+      if (ms > 0) await sleepMs(ms);
       return;
     }
+    case 'WAVE': return;   // picks the Mac's sound waveform
 
     // DELAY expression — the expression is in milliseconds (Standard Reference).
-    case 'DELAY': { const ms = await n(0); if (ms > 0) await new Promise(r => setTimeout(r, ms)); return; }
+    case 'DELAY': { const ms = await n(0); if (ms > 0) await sleepMs(ms); return; }
 
     case 'SWAP': {
       if (args.length >= 2 && args[0].type === 'variable' && args[1].type === 'variable') {
@@ -3900,19 +4373,17 @@ async function execSysCall(stmt, env) {
       return;
 
     case 'MOUSE':
-      if (stmt.keyword === 'ON')  { mouseOn = true;  return; }
-      if (stmt.keyword === 'OFF') { mouseOn = false; return; }
+      if (stmt.keyword === 'ON')  { mouseOn = true; await fireEventHandlers(); return; }
+      if (stmt.keyword === 'OFF') return;   // see trappedBy()
       console.log(`unsupported: MOUSE ${stmt.keyword ?? ''}`); return;
 
     case 'TIMER': {
       if (stmt.keyword === 'ON') {
         timerOn = true;
+        await fireEventHandlers();
         return;
       }
-      if (stmt.keyword === 'OFF') {
-        timerOn = false;
-        return;
-      }
+      if (stmt.keyword === 'OFF') return;   // see trappedBy()
       // TIMER n — set interval in ticks (1 tick ≈ 1/60 s)
       timerInterval = Math.round((await n(0)) * 1000 / 60);
       return;
@@ -3922,19 +4393,20 @@ async function execSysCall(stmt, env) {
       // EVENT ON/OFF — global event enable. EVENT ON yields to the browser and
       // dispatches any pending events to their registered handlers.
       if (stmt.keyword === 'ON') {
-        dialogOn = true;
-        await new Promise(r => setTimeout(r, 0));
+        eventOn = true;
+        await macrotask();
         await fireEventHandlers();
-        // Fire null event when queue is empty (simulates Mac null event)
+        // ON EVENT sees every event before ZBasic does, null events included;
+        // PG:PRO runs its idle work (Supermarket's whole simulation step) there.
         if (onEventHandler) await callEventHandler(onEventHandler);
         return;
       }
-      if (stmt.keyword === 'OFF') { dialogOn = false; return; }
+      if (stmt.keyword === 'OFF') return;   // see trappedBy()
       console.log(`unsupported: EVENT ${stmt.keyword ?? ''}`); return;
 
     case 'MENU':
-      if (stmt.keyword === 'ON')  { renderMenuBar(); return; }
-      if (stmt.keyword === 'OFF') { return; }
+      if (stmt.keyword === 'ON')  { menuOn = true; renderMenuBar(); await fireEventHandlers(); return; }
+      if (stmt.keyword === 'OFF') return;   // see trappedBy()
       // fall through to MENU menuId, itemId, state [, title] handling below
       {
         const a0 = args[0];
@@ -4052,7 +4524,7 @@ async function execSysCall(stmt, env) {
 
     case 'GLOBALS': {
       // GLOBALS GOSUB label / GLOBALS GOTO label — call subroutine in global context
-      if (stmt.keyword === 'GOSUB' && args[0]) { if (debugMode) console.log(`[GLOBALS GOSUB] → ${labelOf(args[0])}`); throw new GosubSignal(labelOf(args[0])); }
+      if (stmt.keyword === 'GOSUB' && args[0]) throw new GosubSignal(labelOf(args[0]));
       if (stmt.keyword === 'GOTO'  && args[0]) throw new GotoSignal(labelOf(args[0]));
       // GLOBALS "filename" — execute the GLBL file's DIM/equate statements
       if (args[0]?.type === 'literal' && typeof args[0].value === 'string') {
@@ -4087,12 +4559,11 @@ async function execSysCall(stmt, env) {
 
     case 'WAIT': {
       const ticks = await n(0);
-      if (ticks > 0) await new Promise(r => setTimeout(r, ticks * 1000 / 60));
+      if (ticks > 0) await sleepMs(ticks * 1000 / 60);
       return;
     }
 
-    case 'TRACE':   { debugMode = true;  return; }
-    case 'NOTRACE': { debugMode = false; return; }
+    case 'TRACE': case 'NOTRACE': return;   // ZBasic's own debugger
 
     case 'PT': {
       showCanvas();
@@ -4127,12 +4598,31 @@ async function execSysCall(stmt, env) {
     case 'NORMAL':  { currentFg = '#000000'; currentBg = '#ffffff'; return; }
 
     case 'KILL': {
-      // KILL PICTURE handle — discard a picture buffer
-      // KILL "filename" — delete file (no-op in browser)
-      if (stmt.keyword === 'PICTURE' && args[0]) {
-        const handle = String(await evalExpr(args[0], env));
-        delete spriteBuffer[handle];
+      // KILL PICTURE handle — discard a picture buffer; KILL name$ — delete a file.
+      if (stmt.keyword === 'PICTURE' && args[0]) delete spriteBuffer[String(await a(0))];
+      else if (!stmt.keyword && args[0]) {
+        const name = await s(0);
+        if (diskGet(name)) diskDelete(name); else await diskError(3, 0);
       }
+      return;
+    }
+
+    // ── disk files (see "Disk files") ────────────────────────
+    // OPEN mode$, [#]n, name$ [, record length [, volume]]
+    case 'OPEN': {
+      const mode = await a(0);
+      if (typeof mode !== 'string') return;   // OPEN TALK (speech)
+      await fileOpen(mode, await fileNum(1), await s(2), Math.floor(await n(3)));
+      return;
+    }
+    // CLOSE [#n [, #m…]] — no number closes every file. CLOSE LPRINT ends printing.
+    case 'CLOSE': {
+      if (stmt.keyword) return;
+      const nums = [];
+      if (stmt.chan) nums.push(Math.trunc(Number(await evalExpr(stmt.chan, env))));
+      for (let i = 0; i < args.length; i++) if (args[i]) nums.push(await fileNum(i));
+      if (!nums.length) await closeAllFiles();
+      for (const num of nums) await fileClose(num);
       return;
     }
 
@@ -4144,75 +4634,51 @@ async function execSysCall(stmt, env) {
       const handle = Math.floor(Number(await evalExpr(args[1], env)));
       const pict = pictHandleMap[handle];
       if (pict) {
-        // Real bitmap when we could decode it; otherwise a placeholder block.
+        // A picture we cannot decode is shown as a grey block of its size.
         if (!drawPictBitmap(pict, px, py)) {
-          ctx.fillStyle = pict.color;
+          ctx.fillStyle = '#aaaaaa';
           ctx.fillRect(px, py, pict.w, pict.h);
         }
       }
       return;
     }
 
-    case 'BLOCKMOVE': {
-      // BLOCKMOVE src, dst, len — copy emulated memory into a variable.
-      // The destination is written either as @v or as VARPTR(v); the latter is
-      // what all four programs actually use, and it used to fall through as a
-      // no-op, leaving ScrnT/ScrnL/ScrnB/ScrnR at zero.
-      if (args.length < 2) return;
-      let dst = args[1];
-      if (dst && dst.type === 'callable' && normVarName(dst.name) === 'varptr' && dst.args?.[0])
-        dst = {type: 'unary', operator: '@', expression: dst.args[0]};
-      if (dst && dst.type === 'unary' && dst.operator === '@' && dst.expression?.type === 'variable') {
-        const src = Math.floor(Number(await evalExpr(args[0], env)));
-        const len = args[2] ? Math.floor(Number(await evalExpr(args[2], env))) : 8;
-        // A rect written into four consecutive DIMmed scalars (DIM T,L,B,R) is
-        // the shape resolveRect already understands; write it back the same way.
-        if (len === 8) {
-          const grp = dimGroups[normVarName(dst.expression.name)];
-          if (grp && grp.length >= 4) {
-            const vals = [fakeReadU16(src), fakeReadU16(src+2), fakeReadU16(src+4), fakeReadU16(src+6)];
-            for (let i = 0; i < 4; i++) writeVar(env, grp[i], vals[i]);
-            return;
-          }
-        }
-        if (len === 8 || len === 4) {
-          // Read as rect (top, left, bottom, right) or point (v, h)
-          const top  = fakeReadU16(src);
-          const left = fakeReadU16(src + 2);
-          const bot  = len >= 8 ? fakeReadU16(src + 4) : 0;
-          const rgt  = len >= 8 ? fakeReadU16(src + 6) : 0;
-          const varName = dst.expression.name;
-          const obj = len >= 8 ? {top, left, bottom: bot, right: rgt, v: top, h: left}
-                                : {v: top, h: left};
-          writeVar(env, varName, obj);
-          // Also set individual fields if they exist in globalVars as a struct
-          if (globalVars[varName] && typeof globalVars[varName] === 'object')
-            Object.assign(globalVars[varName], obj);
-        }
-      }
+    // POKE address, byte — and POKE WORD (`%`) and POKE LONG (`&`), big-endian.
+    case 'POKE': case 'POKE BYTE': case 'POKE WORD': case '%': case 'POKE LONG': case '&': {
+      const addr = Math.floor(await n(0)), v = Math.trunc(await n(1));
+      const size = cmd === 'POKE LONG' || cmd === '&' ? 4 : cmd === 'POKE WORD' || cmd === '%' ? 2 : 1;
+      fakeWriteBytes(addr, [24, 16, 8, 0].slice(4 - size).map(sh => (v >>> sh) & 0xFF));
       return;
     }
 
-    case 'RESOURCES': {
-      // If macResources already has MENU data, nothing to do
-      if (macResources['MENU']?.length) { initMenuBarFromResources(); return; }
-      // Try to auto-fetch the .rsrc sidecar from the server
-      const rsrcFilename = stmt.args?.[0];
-      const rsrcName = (typeof rsrcFilename === 'string' ? rsrcFilename
-        : rsrcFilename?.type === 'literal' && typeof rsrcFilename.value === 'string' ? rsrcFilename.value : null);
-      if (rsrcName && programDir) {
-        const url = `progs/extracted/${programDir}/${rsrcName}.rsrc`;
-        try {
-          const resp = await fetch(url);
-          if (resp.ok) {
-            const buf = await resp.arrayBuffer();
-            parseRsrcFile(buf);
-          }
-        } catch(e) { /* server not running or file absent — silently skip */ }
-      }
-      initMenuBarFromResources();
+    case 'BLOCKMOVE': {
+      // BLOCKMOVE src, dst, len. Either end may be written VARPTR(v) or @v; a
+      // global variable has its bytes in emulated memory, so that is a plain
+      // copy too (see "Variable memory").
+      if (args.length < 2) return;
+      const ref = node => node?.type === 'unary' && node.operator === '@' ? node.expression
+        : node?.type === 'callable' && normVarName(node.name) === 'varptr' ? node.args?.[0] : null;
+      const addrOf = async node => ref(node) ? varAddress(ref(node), env) : Math.floor(await n(args.indexOf(node)));
+      const len = args[2] ? Math.floor(await n(2)) : 8;
+      const src = await addrOf(args[0]), dst = await addrOf(args[1]);
+      if (src && dst) { if (len > 0) fakeWriteBytes(dst, fakeReadBytes(src, len)); return; }
+      // A LOCAL FN's own variable has no address. A rect copied into one is
+      // stored the way resolveRect reads it back: in four consecutive DIMmed
+      // scalars (DIM T,L,B,R), or as a {top, left, bottom, right} object.
+      const v = ref(args[1]);
+      if (!src || v?.type !== 'variable' || (len !== 8 && len !== 4)) return;
+      const w = [0, 2, 4, 6].map(o => fakeReadU16(src + o) << 16 >> 16);
+      const grp = dimGroups[normVarName(v.name)];
+      if (len === 8 && grp && grp.length >= 4) { for (let i = 0; i < 4; i++) writeVar(env, grp[i], w[i]); return; }
+      writeVar(env, v.name, len === 8 ? {top: w[0], left: w[1], bottom: w[2], right: w[3], v: w[0], h: w[1]}
+                                      : {v: w[0], h: w[1]});
       return;
     }
+
+    // RESOURCES "file" names the program's resource file. Every resource fork
+    // that came with the program was loaded with it, so this only has to make
+    // sure the menu bar they describe is up.
+    case 'RESOURCES': initMenuBarFromResources(); return;
 
     // No-op stubs — compiler directives or Mac-only features not available in a browser
     case 'COORDINATE':
@@ -4222,8 +4688,8 @@ async function execSysCall(stmt, env) {
     case 'MINWINDOW': case 'MAXWINDOW': case 'SETZOOM':
     case 'SPEED': case 'LPRINT': case 'LLIST':
     case 'HPLOT': case 'HCOLOR': case 'HGRAPH': case 'SCRN':
-    case 'FLASH': case 'POKE': case 'RESUME':
-    case 'ROUTE': case 'RATIO': case 'SETSELECT': case 'PUSH':
+    case 'FLASH': case 'RESUME':
+    case 'ROUTE': case 'RATIO': case 'PUSH':
     case 'RANDOM':
       return;
 
@@ -4239,41 +4705,82 @@ async function execSysCall(stmt, env) {
         return;
       }
 
-      // Field ID: channel (#id) or expression
+      // EDIT FIELD [#]id [, text$ [, rect [, type [, class]]]]
+      // Every argument after the id is optional and each one that is given
+      // updates just that property: PG:PRO moves a field with
+      // `EDIT FIELD 8001,,@t` and re-justifies one with `EDIT FIELD n,,,,j`.
       const a0 = args[0];
       if (!a0) return;
-      const fieldId = a0.type === 'channel'
+      let fieldId = a0.type === 'channel'
         ? Math.floor(Number(await evalExpr(a0.n, env)))
         : Math.floor(await n(0));
+      // A negative number builds the field without making it the active one.
+      const quiet = fieldId < 0;
+      fieldId = Math.abs(fieldId);
+      const has = i => args[i] != null;
 
-      if (args.length <= 1 || args[1] === null) {
-        // Focus: EDIT FIELD id
+      if (!has(1) && !has(2) && !has(3) && !has(4)) {
+        // EDIT FIELD n makes field n active; EDIT FIELD 0 / #0 leaves none active.
+        if (fieldId === 0) {
+          const cur = currentEditField ? getCtrl(currentEditField) : null;
+          if (cur?.el && document.activeElement === cur.el) cur.el.blur();
+          currentEditField = 0;
+          return;
+        }
         currentEditField = fieldId;
         getCtrl(fieldId)?.el?.focus();
         return;
       }
 
-      // Create/update: EDIT FIELD id, text$, rect, type, justify
-      const text = args[1] ? String(await evalExpr(args[1], env) ?? '') : '';
-      const rect = args[2] ? await resolveCtrlRect(args[2], env) : null;
-
-      if (rect) destroyCtrl(fieldId);
+      // `&handle` hands over the text in a handle ([length word][bytes], which
+      // is both PG:PRO's pG3t layout and our TEXT resources) instead of a string.
+      let text = null;
+      if (has(1)) {
+        if (args[1].type === 'unary' && args[1].operator === '&') {
+          const ptr = fakeReadU32(Math.floor(Number(await evalExpr(args[1].expression, env))) || 0);
+          text = ptr ? macRomanToStr(fakeReadBytes(ptr + 2, fakeReadU16(ptr))) : '';
+        } else text = String(await evalExpr(args[1], env) ?? '');
+      }
+      const rect = has(2) ? await resolveCtrlRect(args[2], env) : null;
+      const type = has(3) ? Math.floor(await n(3)) : null;
+      const cls  = has(4) ? Math.floor(await n(4)) : null;
 
       const wdef = ctrlWdef();
       if (!wdef) return;
 
       let ctrl = getCtrl(fieldId);
+      if (ctrl?.el && rect) {
+        // A new rectangle rebuilds the field but keeps what it held.
+        if (text === null) text = ctrl.el.value;
+        destroyCtrl(fieldId);
+        ctrl = null;
+      }
       if (!ctrl?.el) {
+        if (!rect) {
+          // Nowhere to put it: remember the contents so EDIT$ still reads back.
+          controlStore[ctrlKey(fieldId)] = {el: null, type: 'editfield', value: text ?? ''};
+          return;
+        }
         const el = document.createElement('input');
         el.type = 'text';
         el.className = 'mac-ctrl mac-editfield';
-        el.value = text;
+        el.value = text ?? '';
+        // The field is drawn in the font that was current when it was built —
+        // Supermarket's checkout limits are Monaco 9 in an 11-pixel-high box.
+        el.dataset.font = String(textFont);
+        el.dataset.size = String(textSize);
+        el.dataset.type = String(type ?? 1);
+        el.dataset.just = String(cls ?? 1);
+        // A click in a field is the field's (DIALOG reports it), not a mouse
+        // event in the window underneath.
+        el.addEventListener('mousedown', e => e.stopPropagation());
         el.addEventListener('focus', () => {
           currentEditField = fieldId;
           lastDialogId = fieldId;
           pushEvent('editfield', {id: fieldId, code: 2});
         });
         el.addEventListener('keydown', e => {
+          if (el.readOnly) return;
           if (e.key === 'Enter') { e.preventDefault(); pushEvent('editfield', {id: fieldId, code: 6}); return; }
           if (e.key === 'Tab')   { e.preventDefault(); pushEvent('editfield', {id: fieldId, code: 7}); return; }
           // ON EDIT sees the key before the field does, so hold the keystroke
@@ -4284,19 +4791,30 @@ async function execSysCall(stmt, env) {
           else if (e.key.length === 1) ch = e.key;
           if (ch === null) return;
           e.preventDefault();
-          teKey = ch;
-          pendingEditKey = {fieldId, key: ctrlKey(fieldId), el};
-          currentEditField = fieldId;
-          pushEvent('edit', {id: fieldId});
+          pushEvent('edit', {id: fieldId, key: ch, ctrlKey: ctrlKey(fieldId), el});
         });
         wdef.container.appendChild(el);
-        ctrl = controlStore[ctrlKey(fieldId)] = {el, type: 'editfield', value: text};
-        currentEditField = fieldId;
+        ctrl = controlStore[ctrlKey(fieldId)] = {el, type: 'editfield', value: el.value};
+        if (!quiet) currentEditField = fieldId;
+        placeCtrl(el, rect[0], rect[1], rect[2], rect[3]);
       } else {
-        ctrl.el.value = text;
-        ctrl.value = text;
+        if (text !== null) { ctrl.el.value = text; ctrl.value = text; }
+        if (type !== null) ctrl.el.dataset.type = String(type);
+        if (cls !== null)  ctrl.el.dataset.just = String(cls);
       }
-      if (rect) placeCtrl(ctrl.el, rect[0], rect[1], rect[2], rect[3]);
+      styleEditField(ctrl.el);
+      return;
+    }
+
+    // SETSELECT start, end — select characters in the active edit field.
+    // Supermarket selects a whole limit field (SETSELECT 0,300) when you tab
+    // into it, so typing replaces the old number instead of appending to it.
+    case 'SETSELECT': {
+      const el = currentEditField ? getCtrl(currentEditField)?.el : null;
+      if (el && el.setSelectionRange) {
+        const len = el.value.length;
+        el.setSelectionRange(Math.min(len, Math.max(0, await n(0))), Math.min(len, Math.max(0, await n(1))));
+      }
       return;
     }
 
@@ -4319,45 +4837,49 @@ async function execIf(stmt, env) {
   if (stmt.else)      return execBlock(stmt.else, env);
 }
 
+// FOR/NEXT as the manual defines it (Standard Reference "FOR", "NEXT"; manual
+// chapter "Loops"):
+//   • the body runs AT LEAST ONCE, with the start value, whatever the limit;
+//   • NEXT adds STEP to the variable itself and leaves the loop once the
+//     variable has passed the limit — so afterwards it holds limit+STEP ("X will
+//     equal 22" after FOR X=0 TO 20 STEP 2).
+// The counter therefore lives in the program variable, not in a JS local, and a
+// program may move it. Seventeen loops across these programs do, mostly to exit
+// early (PG:PRO's `loop = theCount`, MacPThy's `I = Xmax`). Supermarket removes a
+// finished shopper with `shp = shp-1` inside `FOR Shp = 0 TO gNbrShoppers-1`;
+// with the counter in a local that was ignored, the shopper shuffled into the
+// freed slot skipped a turn, its SOldItems went stale, and the next XOR redraw
+// erased the wrong number — the garbled counts at the checkouts.
 async function execFor(stmt, env) {
   const varName = stmt.variable;
-  let val = await evalExpr(stmt.start, env);
-  const end  = await evalExpr(stmt.end, env);
-  // A zero or non-numeric STEP would spin forever; fall back to 1.
+  writeVar(env, varName, await evalExpr(stmt.start, env));
+  const end = Number(await evalExpr(stmt.end, env)) || 0;
+  // STEP 0 loops forever on the Mac ("Note 1"); keep the browser usable instead.
   const rawStep = stmt.step ? Number(await evalExpr(stmt.step, env)) : 1;
   const step = Number.isFinite(rawStep) && rawStep !== 0 ? rawStep : 1;
-  while ((step > 0 && val <= end) || (step < 0 && val >= end)) {
+  // ZBasic's reals are decimal (BCD), so FOR C# = 0 TO 1 STEP .01 reaches 1
+  // exactly; binary doubles land a hair past it and would drop the last pass.
+  const slack = Number.isInteger(step) ? 0 : Math.abs(step) * 1e-9;
+  for (;;) {
     await maybeYield();
-    // Must go through writeVar so the loop variable is stored under the same
-    // normalised name readVar() looks up (FOR I% = … must be visible as I%).
-    writeVar(env, varName, val);
     const r = await execBlock(stmt.body, env);
     if (r instanceof ReturnSignal) return r;
-    val += step;
+    writeVar(env, varName, (Number(readVar(env, varName)) || 0) + step);
+    const v = Number(readVar(env, varName)) || 0;   // after integer wrap-around
+    if (step > 0 ? v > end + slack : v < end - slack) return;
   }
 }
 
 async function execWhile(stmt, env) {
-  let iters = 0;
   while (isTruthy(await evalExpr(stmt.condition, env))) {
-    iters++;
-    // Busy-wait delay loops (WHILE FN TICKCOUNT < …) legitimately spin a long
-    // time, so only report this once and only when tracing.
-    if (debugMode && iters === 100000) {
-      const condStr = JSON.stringify(stmt.condition).slice(0, 120);
-      console.warn(`[while] 100000 iterations, cond=${condStr}`);
-    }
     await maybeYield();
     const r = await execBlock(stmt.body, env);
     if (r instanceof ReturnSignal) return r;
   }
 }
 
-let _doLoopCount = 0;
 async function execDoWhile(stmt, env) {
   do {
-    _doLoopCount++;
-    if (debugMode && (_doLoopCount <= 3 || _doLoopCount % 100 === 0)) console.log(`[DO loop] iteration ${_doLoopCount}, qLen=${eventQueue.length}, onDialog=${onDialogHandler}`);
     await maybeYield();
     const r = await execBlock(stmt.body, env);
     if (r instanceof ReturnSignal) return r;
@@ -4398,24 +4920,33 @@ async function execOn(stmt, env) {
   }
 }
 
-// `blankIsItem` is for APPENDMENU, where a blank string is a real (empty)
-// item — CDraw builds its "f(x)=" menu with four APPENDMENU(h," ") calls and
-// then fills each in with SETITEM. Dropping the blanks left that menu empty and
-// there was no way to pick a function to plot.
+// APPENDMENU's item string, with the Menu Manager's metacharacters (Inside
+// Macintosh): ";" separates items, "(" disables one, "!c" gives it the mark
+// character c (Grglflx ticks its current font size with "9 point!" + CHR$(18)),
+// "/c" a command key, "^n" an icon and "<s" a style. A lone "-" is a divider.
+// `blankIsItem` keeps a blank string as a real, empty item: CDraw builds its
+// "f(x)=" menu from APPENDMENU(h," ") calls and fills them in with SETITEM.
 function parseMenuItems(str, blankIsItem = false) {
   const items = [];
   const parts = str.split(';');
   for (const raw of parts) {
-    let text = raw.trim();
-    if (!text) {
+    if (!raw.trim()) {
       if (blankIsItem && parts.length === 1) items.push({title: ' ', enabled: true, checked: false});
       continue;
     }
-    if (text === '-' || text === '(-' || text.startsWith('---')) { items.push({title: '-', enabled: false}); continue; }
-    let enabled = true;
-    if (text.startsWith('(')) { enabled = false; text = text.slice(1); }
-    text = text.replace(/\/.$/, '');  // strip /K keyboard shortcut
-    items.push({title: text.trim(), enabled, checked: false});
+    let title = '', enabled = true, checked = false, cmd = null;
+    for (let i = 0; i < raw.length; i++) {
+      const ch = raw[i];
+      if (ch === '(') enabled = false;
+      else if ('!/^<'.includes(ch) && i + 1 < raw.length) {
+        const arg = raw[++i];
+        if (ch === '!') checked = arg.charCodeAt(0) !== 0;
+        if (ch === '/') cmd = arg;
+      } else title += ch;
+    }
+    title = title.trim();
+    if (title === '-' || title.startsWith('---')) items.push({title: '-', enabled: false, checked: false});
+    else items.push({title, enabled, checked, cmd});
   }
   return items;
 }
@@ -4545,16 +5076,10 @@ async function execProcCall(stmt, env) {
       return;
     }
     case 'getmouse': {
-      // CALL GETMOUSE(pt) — writes current mouse position as packed Mac Point (v<<16|h)
-      const arg0 = stmt.args?.[0];
-      if (arg0) {
-        const assignName = arg0.type === 'callable' ? arg0.name : (arg0.type === 'variable' ? arg0.name : null);
-        if (assignName) {
-          const arr = env[assignName] ?? globalVars[assignName];
-          if (Array.isArray(arr)) { arr[0] = mouseX; arr[1] = mouseY; }
-          else { writeVar(env, assignName, ((mouseY & 0xFFFF) << 16) | (mouseX & 0xFFFF)); }
-        }
-      }
+      // CALL GETMOUSE(pt) — the mouse position as a Point (v, h). CDraw passes
+      // `My` from `DIM My,Mx`; packing both into My left Mx stale, so the
+      // magnifying-glass test along its curves never matched.
+      await writePoint(stmt.args?.[0], env, mouseY, mouseX);
       return;
     }
 
@@ -4646,8 +5171,8 @@ async function execProcCall(stmt, env) {
       if (w <= 0 || hh <= 0) return;
       showCanvas();
       if (name === 'framergn') {
-        ctx.strokeStyle = currentFg; ctx.lineWidth = penWidth;
-        ctx.strokeRect(r.left + 0.5, r.top + 0.5, w - 1, hh - 1);
+        ctx.fillStyle = currentFg;
+        penFrame(ctx, r.left, r.top, r.right, r.bottom);
       } else if (name === 'erasergn') {
         ctx.fillStyle = currentBg; ctx.fillRect(r.left, r.top, w, hh);
       } else if (name === 'invertrgn' || name === 'invertroundrgn') {
@@ -4762,15 +5287,17 @@ async function execProcCall(stmt, env) {
       const round = name.includes('round');
       const oval  = name.includes('oval');
       const rad = round ? Math.min(Math.abs(Number(await ev(1)) || 16) / 2, w / 2, h / 2) : 0;
-      const path = () => {
+      // i insets the shape: a frame is drawn inside it, as QuickDraw does.
+      const path = (i = 0) => {
         ctx.beginPath();
-        if (oval) ctx.ellipse(r.left + w/2, r.top + h/2, w/2, h/2, 0, 0, Math.PI*2);
-        else if (round) ctx.roundRect(r.left, r.top, w, h, rad);
+        if (oval) ctx.ellipse(r.left + w/2, r.top + h/2, Math.max(0, w/2 - i), Math.max(0, h/2 - i), 0, 0, Math.PI*2);
+        else if (round) ctx.roundRect(r.left + i, r.top + i, w - 2*i, h - 2*i, rad);
         else ctx.rect(r.left, r.top, w, h);
       };
       if (name.startsWith('frame')) {
-        ctx.strokeStyle = currentFg; ctx.lineWidth = penWidth;
-        path(); ctx.stroke();
+        ctx.fillStyle = ctx.strokeStyle = currentFg;
+        if (oval || round) { ctx.lineWidth = penWidth; path(penWidth / 2); ctx.stroke(); }
+        else penFrame(ctx, r.left, r.top, r.right, r.bottom);
       } else if (name.startsWith('erase')) {
         ctx.fillStyle = currentBg; path(); ctx.fill();
       } else if (name === 'invertrect') {
@@ -4885,7 +5412,7 @@ async function execProcCall(stmt, env) {
       const readRect = async argN => {
         const a = stmt.args?.[argN];
         if (a?.type !== 'callable') return null;
-        const arr = env[a.name] ?? globalVars[a.name];
+        const arr = readArray(env, a.name);
         if (!Array.isArray(arr)) return null;
         const i = a.args?.[0] ? Math.floor(Number(await evalExpr(a.args[0], env))) : 0;
         return { arr, i };
@@ -4925,13 +5452,10 @@ async function execProcCall(stmt, env) {
       const len     = Math.floor(Number(await evalExpr(stmt.args?.[1], env))) || 0;
       const handle  = Math.floor(Number(await evalExpr(stmt.args?.[2], env))) || 0;
       const rec = teHandleMap[handle];
-      const _rh = env['rhand&'] ?? globalVars['rhand&'];
-      if (debugMode) console.log(`TE TESETTEXT: ptr=0x${textPtr.toString(16)} len=${len} handle=${handle} rec=${!!rec} rhand&=${_rh} fakeRead(${_rh})=${fakeReadU32(_rh)}`);
       if (rec) {
         rec.text = macRomanToStr(fakeReadBytes(textPtr, len));
-        if (debugMode) console.log(`  text="${rec.text.slice(0,60)}"`);
         renderTeDiv(rec);
-      } else if (debugMode) console.warn(`  no TE record for handle ${handle}`);
+      }
       return;
     }
     case 'tecaltext': {
@@ -4940,14 +5464,12 @@ async function execProcCall(stmt, env) {
       if (rec) {
         const lines = rec.text.split('\r').length;
         fakeWriteU16(fakeReadU32(handle) + 94, lines);
-        if (debugMode) console.log(`TE TECALTEXT: handle=${handle} lines=${lines}`);
       } else console.warn(`TE TECALTEXT: no record for handle ${handle}`);
       return;
     }
     case 'teupdate': {
       const handle = Math.floor(Number(await evalExpr(stmt.args?.[1], env))) || 0;
       const rec = teHandleMap[handle];
-      if (debugMode) console.log(`TE TEUPDATE: handle=${handle} rec=${!!rec} text="${rec?.text?.slice(0,40)}"`);
       if (rec) renderTeDiv(rec);
       return;
     }
@@ -4956,7 +5478,6 @@ async function execProcCall(stmt, env) {
       const dV     = Number(await evalExpr(stmt.args?.[1], env)) || 0;
       const handle = Math.floor(Number(await evalExpr(stmt.args?.[2], env))) || 0;
       const rec = teHandleMap[handle];
-      if (debugMode) console.log(`TE TESCROLL: dH=${dH} dV=${dV} handle=${handle}`);
       if (rec) { rec.div.scrollLeft += dH; rec.div.scrollTop += dV; }
       return;
     }
@@ -5103,7 +5624,7 @@ async function execProcCall(stmt, env) {
       ctx.lineWidth = penWidth;
       paintShape(pointBounds([[fx, fy], [tx, ty]]), c => {
         c.lineWidth = penWidth;
-        c.beginPath(); c.moveTo(fx, fy); c.lineTo(tx, ty); c.stroke();
+        penLine(c, fx, fy, tx, ty);
       });
       penX = tx; penY = ty; textX = tx; textY = ty;
       return;
@@ -5176,8 +5697,8 @@ async function execProcCall(stmt, env) {
       // CALL GETKEYS(arr) — fill key state array with zeros (no key pressed)
       const arg0 = stmt.args?.[0];
       if (arg0?.type === 'callable' || arg0?.type === 'variable') {
-        const n = arg0.type === 'callable' ? arg0.name : arg0.name;
-        const arr = env[n] ?? globalVars[n];
+        const n = arg0.name;
+        const arr = readArray(env, n);
         if (Array.isArray(arr)) arr.fill(0);
         else writeVar(env, n, 0);
       }
@@ -5193,16 +5714,7 @@ async function execProcCall(stmt, env) {
     }
     case 'getpen': {
       // CALL GETPEN(arr) — fill arr[0]=v(y), arr[1]=h(x) with current text pen position
-      const arg0 = stmt.args?.[0];
-      const arrName = arg0?.name ?? (arg0?.type === 'callable' ? arg0.name : null);
-      if (arrName) {
-        const baseIdx = arg0?.args?.[0] ? Math.floor(Number(await evalExpr(arg0.args[0], env))) : 0;
-        const arr = env[arrName] ?? globalVars[arrName];
-        if (Array.isArray(arr)) {
-          arr[baseIdx]     = Math.round(gfxPenY);
-          arr[baseIdx + 1] = Math.round(gfxPenX);
-        }
-      }
+      await writePoint(stmt.args?.[0], env, Math.round(gfxPenY), Math.round(gfxPenX));
       return;
     }
     case 'scrollrect': {
@@ -5214,32 +5726,41 @@ async function execProcCall(stmt, env) {
       const [x1, y1, x2, y2] = r;
       const w = Math.max(0, x2 - x1), h = Math.max(0, y2 - y1);
       if (!w || !h) return;
-      const img = ctx.getImageData(x1 * CANVAS_SCALE, y1 * CANVAS_SCALE, w * CANVAS_SCALE, h * CANVAS_SCALE);
+      const img = ctx.getImageData(dev(x1), dev(y1), dev(x1 + w) - dev(x1), dev(y1 + h) - dev(y1));
       ctx.fillStyle = currentBg;
       ctx.fillRect(x1, y1, w, h);
-      ctx.putImageData(img, (x1 + dh) * CANVAS_SCALE, (y1 + dv) * CANVAS_SCALE);
+      ctx.putImageData(img, dev(x1 + dh), dev(y1 + dv));
       return;
     }
-    case 'blockmove': return;  // memory copy stub
     case 'localtoglobal': case 'globaltolcal': return;  // coordinate conversion no-op
   }
 
   const fn = funcDefs[name];
   if (!fn) { console.log(`undefined: ${name}`); return; }
-  if (debugMode) console.log(`▶ CALL ${name}`);
-  const local = makeLocalScope(fn, env);
-  if (fn.args) for (let i = 0; i < fn.args.length; i++)
-    local[fn.args[i].name] = await evalExpr(stmt.args?.[i], env);
+  const local = makeLocalScope(fn);
+  await bindArgs(fn, local, stmt.args, env);
   await execBlock(fn.body, local);
 }
 
 let savedMenuBar = null;
 
+// Bind a function's parameters in its new scope. They go under the normalised
+// name that readVar() tries first: stored as the raw `x%`, a read of x% inside a
+// LOCAL FN found any global `x` through the scope's prototype chain before it
+// ever got to the parameter. They are typed like an assignment, too.
+async function bindArgs(fn, local, args, env) {
+  const params = fn.args ?? [];
+  // All arguments are evaluated before any is bound: with global parameters,
+  // binding the first could change what the second evaluates to.
+  const vals = [];
+  for (let i = 0; i < params.length; i++) vals.push(await evalExpr(args?.[i], env));
+  params.forEach((p, i) => {
+    const n = normVarName(p.name);
+    local[n] = coerceVar(n, vals[i]);
+  });
+}
+
 async function execUserFuncCall(stmt, env) {
-  // Fast-path: system functions that ZBasic parses as user FN calls
-  switch (stmt.name.toLowerCase()) {
-    case 'tickcount': return tickCount();
-  }
   // Intercept pGbuild — the actual LOCAL FN body never pushes a window-update
   // event (it relies on Mac OS event machinery). We create the window and push
   // a dialog event (code 5 = WUpd) so DIALOG ON fires "PG:WUpd" → RefreshMain.
@@ -5247,7 +5768,6 @@ async function execUserFuncCall(stmt, env) {
     const wndArg = Math.floor(Number(await evalExpr(stmt.args?.[0], env) ?? 1));
     let wndNum = wndArg < 0 ? -wndArg : wndArg;
     if (wndNum < 1) wndNum = 1;
-    if (debugMode) console.log(`[pGbuild] wndNum=${wndNum}`);
     // Geometry and title come from the window's own pG3w resource, the same
     // one PG:PRO reads in FN pGgetWnd$ — otherwise every window came up
     // 512x342 and titled with its number.
@@ -5275,188 +5795,19 @@ async function execUserFuncCall(stmt, env) {
     return null;
   }
   const fn = funcDefs[stmt.name];
-  if (!fn) {
-    // Built-in Toolbox FN calls
-    const ev = i => evalExpr(stmt.args?.[i], env);
-    switch (stmt.name) {
-      case 'newmenu': {
-        const menuId = Math.floor(Number(await ev(0))) || 0;
-        const title  = String((await ev(1)) ?? '');
-        menuDefs[menuId] = makeMenu(title);
-        renderMenuBar();
-        return menuId;
-      }
-      case 'getmenubar':
-        savedMenuBar = JSON.parse(JSON.stringify(menuDefs));
-        return 1;
-      case 'getmhandle': {
-        // Return the menu ID as its own "handle" (we use IDs directly)
-        const mid = Math.floor(Number(await ev(0))) || 0;
-        return mid;
-      }
-      case 'countmitems': {
-        const handle = Math.floor(Number(await ev(0))) || 0;
-        return menuDefs[handle] ? Object.keys(menuDefs[handle].items).length : 0;
-      }
-      case 'finderinfo': return 0;
-      case 'count1resources': case 'countresources': {
-        const typeArg = stmt.args?.[0];
-        const typeStr = await resTypeOf(typeArg, env);
-        if (!typeStr) return 0;
-        return (macResources[typeStr] ?? []).length;
-      }
-      case 'getindresource': case 'get1indresource': {
-        const typeArg = stmt.args?.[0];
-        const typeStr = await resTypeOf(typeArg, env);
-        if (!typeStr) return 0;
-        const idx = Math.floor(Number(await ev(1))) - 1;
-        const resources = macResources[typeStr] ?? [];
-        if (idx < 0 || idx >= resources.length) return 0;
-        return handleForResource(resources[idx]);
-      }
-      case 'getresource': case 'get1resource': {
-        // FN GETRESOURCE(type&, id%) -> handle
-        const typeArg = stmt.args?.[0];
-        const typeStr = await resTypeOf(typeArg, env);
-        const isPict = typeStr.toUpperCase() === 'PICT';
-        if (!isPict) {
-          // Any other loaded resource: hand back its real bytes.
-          const wantId = Math.floor(Number(await ev(1)) ?? 0);
-          const res = (macResources[typeStr] ?? []).find(r => r.id === wantId);
-          return res ? handleForResource(res) : 0;
-        }
-        // PICT: we do not interpret QuickDraw opcodes, so hand back a handle
-        // carrying picSize + picFrame. Take the frame from the real resource
-        // when it is loaded, so sizes and layout come out right.
-        const pictId = Math.floor(Number(await ev(1)) ?? 0);
-        const pictRes = (macResources['PICT'] ?? []).find(r => r.id === pictId);
-        let ph, pw, color = '#000000';
-        if (pictRes && pictRes.data.length >= 10) {
-          const d = pictRes.data;   // [0..1] picSize, [2..9] picFrame top,left,bottom,right
-          const rd = o => ((d[o] << 8) | d[o+1]) << 16 >> 16;
-          ph = rd(6) - rd(2);   // bottom - top
-          pw = rd(8) - rd(4);   // right  - left
-        } else {
-          // Fallback sizes for the Supermarket sprites when no resource fork is
-          // present. Sprites must be black so PUT XOR works: black XOR white =
-          // black (draw), black XOR black = white (erase).
-          const pictDims = {4000:[280,500,'#888888'], 5000:[30,50,'#c8a060'], 5001:[20,8,'#000000'], 5004:[20,20,'#000000']};
-          [ph, pw, color] = pictDims[pictId] ?? [20, 20, '#aaaaaa'];
-        }
-        if (!(ph > 0) || !(pw > 0)) { ph = 20; pw = 20; }
-        const bitmap = pictRes ? decodePictBitmap(pictRes.data) : null;
-        if (bitmap) { pw = bitmap.w; ph = bitmap.h; }
-        // PICT data: 2-byte picSize + 8-byte picFrame (top,left,bottom,right as int16 big-endian)
-        const dataAddr = fakeMalloc(10);
-        fakeWriteU16(dataAddr, 10);          // picSize
-        fakeWriteU16(dataAddr+2, 0);         // top
-        fakeWriteU16(dataAddr+4, 0);         // left
-        fakeWriteU16(dataAddr+6, ph);        // bottom
-        fakeWriteU16(dataAddr+8, pw);        // right
-        const handle = fakeMalloc(4);
-        fakeWriteU32(handle, dataAddr);
-        pictHandleMap[handle] = {id: pictId, w: pw, h: ph, color, mask: bitmap?.mask ?? null};
-        return handle;
-      }
-      case 'getnamedresource': case 'get1namedresource': {
-        // FN GETNAMEDRESOURCE(type&, name$) -> handle or 0
-        const type = await resTypeOf(stmt.args?.[0], env);
-        const name = String((await ev(1)) ?? '');
-        const res = (macResources[type] ?? []).find(r => r.name.toLowerCase() === name.toLowerCase());
-        if (res) {
-          const handle = handleForResource(res);
-          console.log(`GETNAMEDRESOURCE '${type}' "${name}" len=${res.data.length} handle=${handle}`);
-          return handle;
-        }
-        // Fall back to the TEXT cache, stored as [2-byte length][bytes].
-        const text = rsrcTexts[name.toLowerCase()];
-        if (!text) { console.warn(`GETNAMEDRESOURCE '${type}' "${name}" not found`); return 0; }
-        const bytes = new Uint8Array(text.length);
-        for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i) & 0xFF;
-        const dataAddr = fakeMalloc(2 + bytes.length);
-        fakeWriteU16(dataAddr, bytes.length);
-        fakeWriteBytes(dataAddr + 2, bytes);
-        const handle = fakeMalloc(4);
-        fakeWriteU32(handle, dataAddr);
-        console.log(`GETNAMEDRESOURCE TEXT "${name}" len=${bytes.length} handle=${handle}`);
-        return handle;
-      }
-      case 'openresfile': case 'openrfperm': return 0;
-      case 'curresfile': case 'homeresfile': return 0;
-      case 'newrgn': return newRegion();
-      case 'bittst': return 0;       // FN BITTST(ptr,bit) — keyboard/memory bit test stub
-      case 'stringwidth': return 0;  // handled below in evalCallable default path
-      case 'sizeresource': return 0; // FN SIZERESOURCE(handle) — resource byte count stub
-      case 'gethandlesize': return 0;
-      case 'zeroscrap': return 0;
-      case 'putscrap': return 0;
-      case 'gestalt': return 0;
-      case 'aeinstalleventhandler': return 0;
-      // FN ALERT / STOPALERT / CAUTIONALERT / NOTEALERT (alrtID, filterProc)
-      // — put the alert up and return the item the user clicked.
-      case 'alert': case 'stopalert': case 'cautionalert': case 'notealert':
-      case 'caution': case 'stop':
-        return showAlert(Math.floor(Number(await ev(0)) || 0), ALERT_ICONS[stmt.name] ?? 'ℹ️');
-      case 'getnewdialog': return 0;
-      case 'getcrefcon': return 0;
-      case 'getcref': return 0;
-      case 'pstr$': {
-        const addr = Math.floor(Number(await ev(0)) ?? 0);
-        if (!addr) return '';
-        const len = fakeReadBytes(addr, 1)[0];
-        return macRomanToStr(fakeReadBytes(addr + 1, len));
-      }
-      case 'tehandle': return 0;
-      case 'tenew': {
-        const h = await makeTeHandle(stmt.args?.[1], env);
-        if (debugMode) console.log(`TE TENEW: handle=${h}`);
-        return h;
-      }
-      case 'ptinrect': {
-        // FN PTINRECT(pt, rect) — use current mouseX/mouseY against the rect
-        const ri = stmt.args?.[1];
-        let left = 0, top = 0, right = 512, bottom = 512;
-        if (ri?.type === 'callable') {
-          const arrName = ri.name;
-          const ri0 = ri.args?.[0] ? Math.floor(Number(await evalExpr(ri.args[0], env))) : 0;
-          const ri1 = ri.args?.[1] ? Math.floor(Number(await evalExpr(ri.args[1], env))) : null;
-          const arr = env[arrName] ?? globalVars[arrName];
-          if (Array.isArray(arr)) {
-            let row = arr, base = ri0;
-            if (ri1 !== null && Array.isArray(arr[ri0])) { row = arr[ri0]; base = ri1; }
-            left = Number(row[base] ?? 0); top = Number(row[base+1] ?? 0);
-            right = Number(row[base+2] ?? 0); bottom = Number(row[base+3] ?? 0);
-          }
-        }
-        return (mouseX >= left && mouseX < right && mouseY >= top && mouseY < bottom) ? -1 : 0;
-      }
-      case 'getctitle': return '';
-      case 'button': { const bid = Math.floor(Number(await A(0)??0)); return getCtrl(bid)?.value ?? 0; }
-      case 'button&': { const bid = Math.floor(Number(await A(0)??0)); return getCtrl(bid) ? bid : 0; }
-      case 'pGgetitemname$': case 'pGgetitemname': return '';
-    }
-    return null;
-  }
+  // Anything that is not one of the program's own functions is a built-in or
+  // a Toolbox function — the same table a bare name(...) call goes through.
+  if (!fn) return evalCallable({name: stmt.name, args: stmt.args}, env, true);
   if (fn.using) {
     // DEF FN foo USING bar& — dispatch through function pointer stored in bar&
     const ptrName = fn.using.name;
-    const handle = Math.floor(Number(env[ptrName] ?? globalVars[ptrName] ?? 0));
+    const handle = Math.floor(Number(readVar(env, ptrName) ?? 0));
     const targetName = fnPtrTable[handle];
-    // pGbuild(wndClass) — pointer is 0 (unresolved PG:PRO stub); create window + fire update
-    if (!targetName && stmt.name.replace(/\s+/g,'').toLowerCase() === 'pgbuild') {
-      const wndNum = Math.floor(Number(await evalExpr(stmt.args?.[0], env) ?? 1));
-      getOrCreateWindow(wndNum, null, 512, 342);
-      setOutputWindow(wndNum);
-      eventQueue.push({type:'dialog', code:5, winRef:wndNum});
-      return null;
-    }
     if (!targetName || !funcDefs[targetName]) return null;
     return execUserFuncCall({...stmt, name: targetName}, env);
   }
-  if (debugMode) console.log(`▶ FN ${stmt.name}`);
-  const local = makeLocalScope(fn, env);
-  if (fn.args) for (let i = 0; i < fn.args.length; i++)
-    local[fn.args[i].name] = await evalExpr(stmt.args?.[i], env);
+  const local = makeLocalScope(fn);
+  await bindArgs(fn, local, stmt.args, env);
   if (fn.type === 'defFn') return evalExpr(fn.value, local);
   await execBlock(fn.body, local);
   return fn.ret ? evalExpr(fn.ret, local) : null;
@@ -5528,7 +5879,7 @@ async function evalExpr(node, env, lvlReal) {
         const flat = base + '.' + node.fields.map(normVarName).join('.');
         if (flat in globalVars) return globalVars[flat] ?? 0;
       }
-      let v = env[node.name] ?? globalVars[node.name] ?? {};
+      let v = readVar(env, node.name) ?? {};
       for (const f of node.fields) v = (v && typeof v === 'object') ? (v[normVarName(f)] ?? v[f]) : null;
       return v ?? 0;
     }
@@ -5646,7 +5997,7 @@ function compareOp(op, l, r) {
 }
 
 // ── Built-in functions ────────────────────────────────────────
-async function evalCallable(node, env) {
+async function evalCallable(node, env, fnCall = false) {
   const name = (node.name ?? '').toLowerCase();
   const rawArgs = node.args || [];
   const A = async (i) => rawArgs[i] ? evalExpr(rawArgs[i], env) : null;
@@ -5699,19 +6050,22 @@ async function evalCallable(node, env) {
     // STR#(resID, index) — the index'th string of a STR# resource.
     case 'str#': { return strListItem(Math.floor(await N(0)), Math.floor(await N(1))); }
     case 'val':   { return parseFloat(String(await A(0)??''))||0; }
-    case 'asc':   { return (String(await A(0)??'')).charCodeAt(0)||0; }
-    case 'chr$': case 'chr': { return String.fromCharCode(await N(0)); }
+    case 'asc':   { return strToMacRoman(String(await A(0) ?? '').slice(0, 1))[0] ?? 0; }
+    case 'chr$': case 'chr': { return macChr(await N(0)); }
     // Mac type/ID conversion functions
-    case 'cvi': { const s = await S(0); let v=0; for(let i=0;i<s.length&&i<2;i++) v=(v<<8)|s.charCodeAt(i); return v; }
-    case 'cvl': { const s = await S(0); let v=0; for(let i=0;i<s.length&&i<4;i++) v=(v<<8)|s.charCodeAt(i); return v; }
-    case 'cvs': { const s = await S(0); let v=0; for(let i=0;i<s.length&&i<4;i++) v=(v<<8)|s.charCodeAt(i); return v; }
-    case 'mki': { const n_=await N(0); return String.fromCharCode((n_>>8)&0xFF, n_&0xFF); }
-    case 'mkl': { const n_=await N(0)|0; return String.fromCharCode((n_>>24)&0xFF,(n_>>16)&0xFF,(n_>>8)&0xFF,n_&0xFF); }
+    // MKI$/MKL$ pack an integer into 2/4 characters and CVI/CVL unpack them;
+    // the characters are Mac Roman, like every other string here.
+    case 'cvi': case 'cvl': case 'cvs': {
+      const b = strToMacRoman(await S(0)).slice(0, name === 'cvi' ? 2 : 4);
+      return b.reduce((v, x) => (v << 8) | x, 0);
+    }
+    case 'mki': case 'mki$': { const v = await N(0); return macRomanToStr([(v >> 8) & 0xFF, v & 0xFF]); }
+    case 'mkl': case 'mkl$': { const v = (await N(0)) | 0; return macRomanToStr([(v >> 24) & 0xFF, (v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF]); }
     case 'hex$': case 'hex': { return (Number(await A(0))|0).toString(16).toUpperCase(); }
     case 'oct$': case 'oct': { return (Number(await A(0))|0).toString(8); }
     case 'instr': { const aa = await all(); return aa.length===2 ? String(aa[0]??'').indexOf(String(aa[1]??''))+1 : String(aa[1]??'').indexOf(String(aa[2]??''),(Number(aa[0])||1)-1)+1; }
     case 'space$': case 'space': case 'spc': { return ' '.repeat(Math.max(0,await N(0))); }
-    case 'string$': case 'string': { const [n_,a_]=await all(); const c=typeof a_==='number'?String.fromCharCode(a_):String(a_??'')[0]||' '; return c.repeat(Math.max(0,Number(n_)||0)); }
+    case 'string$': case 'string': { const [n_,a_]=await all(); const c=typeof a_==='number'?macChr(a_):String(a_??'')[0]||' '; return c.repeat(Math.max(0,Number(n_)||0)); }
     case 'tab':   { return ' '.repeat(Math.max(0,await N(0))); }
     case 'ucase$': case 'ucase': { return (await S(0)).toUpperCase(); }
     case 'lcase$': case 'lcase': { return (await S(0)).toLowerCase(); }
@@ -5732,9 +6086,8 @@ async function evalCallable(node, env) {
         // taken by the ON DIALOG trap, so the help window never got built.
         // A short wait rather than a bare poll keeps `WHILE DIALOG(0)=0` loops
         // from spinning hot.
-        const evt = await waitForEvent(16);
-        if (evt.type === 'stop' && !onStopHandler) throw new Error('USER_STOP');
-        if (evt.type === 'stop' && onStopHandler) { await callEventHandler(onStopHandler); return 0; }
+        const evt = await waitForEvent(16, isDialogEvent);
+        if (evt.type === 'stop') throw new Error('USER_STOP');
         // Only dialog-class events carry a DIALOG() code; menu and mouse events
         // are reported through MENU()/MOUSE() instead (see ZBasic Mac notes).
         if (evt.code !== undefined) return evt.code;
@@ -5845,9 +6198,27 @@ async function evalCallable(node, env) {
       if (n_ < 0) return currentEditField ?? 0;
       return 0;
     }
+    // FILES$(1, types$, , vol%) — the Open dialog; FILES$(0, prompt$, name$, vol%)
+    // the Save dialog (see fileDialog). The name, or "" when cancelled.
+    case 'files$': {
+      const name = (await N(0)) === 0
+        ? await fileDialog({mode: 'save', prompt: await S(1), name: await S(2)})
+        : await fileDialog({mode: 'open', types: (await S(1)).match(/.{1,4}/g) ?? []});
+      if (name && rawArgs[3]?.name) await storeInto(rawArgs[3], DISK_VOL, env);
+      // Closing the dialog uncovers the window, which gets an update event, as
+      // on the Mac: that is how CDraw comes to draw a document it has just read.
+      if (frontWindowId != null) pushEvent('dialog', {code: 5, winRef: frontWindowId});
+      return name;
+    }
+    // LOF(n): the last record number (at least 1); EOF(n): -1 at the end.
+    case 'lof': { const f = openFiles.get(Math.trunc(await N(0))); return f ? Math.max(1, Math.ceil(f.len / f.recLen)) : 0; }
+    case 'eof': { const f = openFiles.get(Math.trunc(await N(0))); return !f || f.pos >= f.len ? -1 : 0; }
     case 'varptr': {
-      // Toolbox calls take VARPTR(s$)+1 as a pointer to the characters.
       const a0 = rawArgs[0];
+      const addr = await varAddress(a0, env);
+      if (addr) return addr;
+      // Not a global (a LOCAL FN's variable): give it a cell of its own.
+      // Toolbox calls take VARPTR(s$)+1 as a pointer to the characters.
       const v = await A(0);
       if (typeof v === 'string') {
         const key = a0?.name ? normVarName(a0.name) + (a0.args?.length ? '[]' : '') : `#${++varPtrAnon}`;
@@ -5883,24 +6254,7 @@ async function evalCallable(node, env) {
     case 'lbound': return 0;
     case 'vartype': return 0;
 
-    case 'ptinrect': {
-      // FN PTINRECT(pt, rect(i)) — always uses current mouseX/mouseY for the point
-      const rectNode = rawArgs[1];
-      let left = 0, top = 0, right = 512, bottom = 512;
-      if (rectNode?.type === 'callable') {
-        const arrName = rectNode.name;
-        const ri0 = rectNode.args?.[0] ? Math.floor(Number(await evalExpr(rectNode.args[0], env))) : 0;
-        const ri1 = rectNode.args?.[1] ? Math.floor(Number(await evalExpr(rectNode.args[1], env))) : null;
-        const arr = env[arrName] ?? globalVars[arrName];
-        if (Array.isArray(arr)) {
-          let row = arr, base = ri0;
-          if (ri1 !== null && Array.isArray(arr[ri0])) { row = arr[ri0]; base = ri1; }
-          left = Number(row[base] ?? 0); top = Number(row[base+1] ?? 0);
-          right = Number(row[base+2] ?? 0); bottom = Number(row[base+3] ?? 0);
-        }
-      }
-      return (mouseX >= left && mouseX < right && mouseY >= top && mouseY < bottom) ? -1 : 0;
-    }
+    case 'ptinrect': return ptInRect(rawArgs, env);
 
     // POINT(x,y) — 1 if the pixel is foreground, 0 if background, -1 off-screen.
     case 'point': {
@@ -5908,7 +6262,7 @@ async function evalCallable(node, env) {
       const wdef = windowDefs[outputWindowId ?? frontWindowId];
       if (!ctx || !wdef) return -1;
       if (px < 0 || py < 0 || px >= (wdef.logW ?? 512) || py >= (wdef.logH ?? 342)) return -1;
-      const d = ctx.getImageData(px * CANVAS_SCALE, py * CANVAS_SCALE, 1, 1).data;
+      const d = ctx.getImageData(dev(px + 0.5) , dev(py + 0.5), 1, 1).data;
       // Anything appreciably darker than white counts as the foreground.
       return (d[0] + d[1] + d[2]) < 384 ? 1 : 0;
     }
@@ -5942,12 +6296,7 @@ async function evalCallable(node, env) {
       const idx = Math.floor(Number(await N(1))) - 1;
       const resources = macResources[typeStr] ?? [];
       if (idx < 0 || idx >= resources.length) return 0;
-      const res = resources[idx];
-      const dataAddr = fakeMalloc(res.data.length);
-      fakeWriteBytes(dataAddr, res.data);
-      const handle = fakeMalloc(4);
-      fakeWriteU32(handle, dataAddr);
-      return handle;
+      return handleForResource(resources[idx]);
     }
     case 'pstr$': {
       const addr = Math.floor(Number(await A(0)) ?? 0);
@@ -5969,6 +6318,64 @@ async function evalCallable(node, env) {
     case 'caution': case 'stop':
       return showAlert(Math.floor(await N(0)), ALERT_ICONS[name] ?? 'ℹ️');
 
+    // ── Toolbox functions (normally written FN Name(...)) ─────────
+    case 'newmenu': {
+      const menuId = Math.floor(Number(await A(0))) || 0;
+      const title  = String((await A(1)) ?? '');
+      menuDefs[menuId] = makeMenu(title);
+      renderMenuBar();
+      return menuId;
+    }
+    case 'getmenubar':
+      savedMenuBar = JSON.parse(JSON.stringify(menuDefs));
+      return 1;
+    case 'getmhandle': {
+      // Return the menu ID as its own "handle" (we use IDs directly)
+      const mid = Math.floor(Number(await A(0))) || 0;
+      return mid;
+    }
+    case 'getresource': case 'get1resource': {
+      // FN GETRESOURCE(type&, id%) — a handle to the resource's bytes, or 0
+      // (NIL) when there is no such resource, which programs test for.
+      const res = findRes(await resTypeOf(rawArgs[0], env), Math.floor(await N(1)));
+      if (!res) return 0;
+      const handle = handleForResource(res);
+      // PICTURE draws a picture from its decoded bitmap.
+      if (res.type === 'PICT' && !pictHandleMap[handle]) {
+        const bitmap = decodePictBitmap(res.data);
+        const d = res.data, rd = o => ((d[o] << 8) | d[o + 1]) << 16 >> 16;
+        pictHandleMap[handle] = bitmap ?? {w: rd(8) - rd(4), h: rd(6) - rd(2), mask: null};
+      }
+      return handle;
+    }
+    case 'getnamedresource': case 'get1namedresource': {
+      // FN GETNAMEDRESOURCE(type&, name$) -> handle or 0
+      const type = await resTypeOf(rawArgs?.[0], env);
+      const name = String((await A(1)) ?? '');
+      const res = (macResources[type] ?? []).find(r => r.name.toLowerCase() === name.toLowerCase());
+      if (res) {
+        const handle = handleForResource(res);
+        return handle;
+      }
+      // Fall back to the TEXT cache, stored as [2-byte length][bytes].
+      const text = rsrcTexts[name.toLowerCase()];
+      if (!text) { console.warn(`GETNAMEDRESOURCE '${type}' "${name}" not found`); return 0; }
+      const bytes = new Uint8Array(text.length);
+      for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i) & 0xFF;
+      const dataAddr = fakeMalloc(2 + bytes.length);
+      fakeWriteU16(dataAddr, bytes.length);
+      fakeWriteBytes(dataAddr + 2, bytes);
+      const handle = fakeMalloc(4);
+      fakeWriteU32(handle, dataAddr);
+      return handle;
+    }
+    case 'openresfile': case 'openrfperm': case 'homeresfile': return 0;
+    case 'newrgn': return newRegion();
+    case 'zeroscrap': case 'putscrap': case 'aeinstalleventhandler': return 0;
+    case 'getnewdialog': case 'getcref': case 'tehandle': return 0;
+    case 'getctitle': return '';
+    case 'tenew': return makeTeHandle(rawArgs[1], env);
+
     case 'tickcount': return tickCount();
 
     default: {
@@ -5980,11 +6387,10 @@ async function evalCallable(node, env) {
       // the function instead: every X, O and • marker came back with a null x
       // coordinate and was never drawn, so those three tools looked dead.
       // gShopper(i) — a whole record, gathered from its field arrays.
+      if (fnCall) return 0;   // an FN with no definition and no built-in
       if (recordOf[normVarName(name)])
         return readRecord(normVarName(name), subIdx(await A(0)));
-      // The name still carries its type suffix here, so go through readVar
-      // rather than indexing the environment directly.
-      const arr = readArray(env, name) ?? env[name] ?? globalVars[name];
+      const arr = readArray(env, name);
       if (Array.isArray(arr)) {
         const idxs = (await all()).map(subIdx);
         let v = arr;
@@ -6004,6 +6410,299 @@ function mac16(idx) {
              '#0000cc','#0099ff','#00bb00','#006600','#663300','#996633',
              '#cccccc','#888888','#444444','#000000'];
   return p[((idx%16)+16)%16];
+}
+
+// ── Sound ─────────────────────────────────────────────────────
+// One AudioContext for the page: browsers allow only a few.
+let audioCtx = null;
+function tone(freq, ms, volume = 1) {
+  try {
+    audioCtx ??= new (window.AudioContext || window.webkitAudioContext)();
+    const osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
+    osc.type = 'square';
+    osc.frequency.value = Math.min(10000, Math.max(20, freq || 880));
+    gain.gain.value = 0.15 * Math.min(1, Math.max(0, volume));
+    osc.connect(gain).connect(audioCtx.destination);
+    osc.start();
+    osc.stop(audioCtx.currentTime + ms / 1000);
+  } catch (e) { /* no audio available */ }
+}
+
+// ── Disk files ────────────────────────────────────────────────
+// A Mac program kept its documents on a disk shared by every application,
+// each file tagged with a four-letter type and creator (DEF OPEN) that the
+// Open dialog filtered on: FILES$(1,"BIDr") lists only Price Theory's saved
+// screens. Here that disk is the browser's localStorage, shared by the
+// programs on this page; the file dialogs and the toolbar's Documents button
+// import files from the computer and export them back to it.
+const DISK_KEY = 'zbasic-disk';
+const DISK_VOL = -1;   // the volume reference FILES$ hands back; only OPEN takes it
+let diskFiles = null;  // lowercased name → {name, type, creator, data: Uint8Array, date}
+
+function disk() {
+  if (diskFiles) return diskFiles;
+  diskFiles = {};
+  try {
+    for (const [k, f] of Object.entries(JSON.parse(localStorage.getItem(DISK_KEY) || '{}'))) {
+      const bin = atob(f.data);
+      diskFiles[k] = {...f, data: Uint8Array.from(bin, c => c.charCodeAt(0))};
+    }
+  } catch (e) { /* no storage here (a private window): the disk lasts as long as the page */ }
+  return diskFiles;
+}
+function saveDisk() {
+  try {
+    const out = {};
+    for (const [k, f] of Object.entries(disk())) {
+      let bin = '';
+      for (let i = 0; i < f.data.length; i += 0x8000) bin += String.fromCharCode(...f.data.subarray(i, i + 0x8000));
+      out[k] = {...f, data: btoa(bin)};
+    }
+    localStorage.setItem(DISK_KEY, JSON.stringify(out));
+  } catch (e) { console.warn(`documents not saved in the browser: ${e.message}`); }
+}
+const diskGet = name => disk()[String(name).toLowerCase()] ?? null;   // HFS ignores case
+function diskPut(name, data, type, creator) {
+  disk()[String(name).toLowerCase()] = {name, type, creator, data, date: Date.now()};
+  saveDisk();
+}
+function diskDelete(name) { delete disk()[String(name).toLowerCase()]; saveDisk(); }
+
+// A file travels to and from the computer with its type as the extension
+// ("Budget.BIDr"), so that importing it back gives it the same type.
+function exportFile(f) {
+  const ext = f.type === 'TEXT' ? 'txt' : f.type.trim();
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([f.data]));
+  a.download = ext ? `${f.name}.${ext}` : f.name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+async function importFile(file, defType) {
+  let name = file.name, type = defType;
+  const m = name.match(/^(.+)\.([^.]{3,4})$/);
+  if (m && /^txt$/i.test(m[2])) [name, type] = [m[1], 'TEXT'];
+  else if (m && m[2].length === 4) [name, type] = [m[1], m[2]];
+  diskPut(name, new Uint8Array(await file.arrayBuffer()), type, '????');
+  return name;
+}
+
+// ── OPEN, CLOSE, PRINT#, INPUT#, READ FILE, WRITE FILE ──
+// OPEN "I"|"O"|"R"|"A", n, name$ [, record length [, volume]] (manual, OPEN):
+// "I" reads an existing file, "O" replaces it, "R" reads and writes it,
+// creating it if need be, and "A" appends. A file is a byte stream with one
+// position, so INPUT#'s text and READ FILE's raw bytes can share it, as CDraw's
+// documents do. What was written reaches the disk at CLOSE.
+const openFiles = new Map();   // file number → {name, mode, type, creator, data, len, pos, recLen, changed}
+let defOpen = 'TEXT????';      // DEF OPEN "typecrea" — for the files OPEN creates
+
+async function fileOpen(mode, num, name, recLen) {
+  mode = mode.trim().toUpperCase()[0];
+  if (!'IORA'.includes(mode)) return;   // "C" (serial port), OPEN TALK — not files
+  if (!(num >= 1 && num <= 99)) return diskError(6, num);
+  if (!name || name.includes(':')) return diskError(5, num);
+  const old = diskGet(name);
+  if (mode === 'I' && !old) return diskError(3, num);
+  await fileClose(num);
+  const keep = old && mode !== 'O';
+  const data = keep ? old.data.slice() : new Uint8Array(0);
+  openFiles.set(num, {
+    name: old && keep ? old.name : name, mode, data, len: data.length,
+    pos: mode === 'A' ? data.length : 0, recLen: recLen > 0 ? recLen : 256, changed: mode === 'O' || !old,
+    type: keep ? old.type : defOpen.slice(0, 4), creator: keep ? old.creator : defOpen.slice(4, 8),
+  });
+}
+async function fileClose(num) {
+  const f = openFiles.get(num);
+  if (!f) return;
+  openFiles.delete(num);
+  if (f.changed) diskPut(f.name, f.data.slice(0, f.len), f.type, f.creator);
+}
+async function closeAllFiles() { for (const num of [...openFiles.keys()]) await fileClose(num); }
+
+// The open file `num`, or null after reporting why it cannot be used that way.
+async function fileFor(num, writing) {
+  const f = openFiles.get(num);
+  if (!f) { if (num >= 0) await diskError(4, num); return null; }   // -1/-2 are serial ports
+  if (writing && f.mode === 'I') { await diskError(8, num); return null; }
+  if (!writing && (f.mode === 'O' || f.mode === 'A')) { await diskError(7, num); return null; }
+  return f;
+}
+async function fileWrite(num, bytes) {
+  const f = await fileFor(num, true);
+  if (!f) return;
+  const end = f.pos + bytes.length;
+  if (end > f.data.length) {
+    const grown = new Uint8Array(Math.max(end, 2 * f.data.length, 256));
+    grown.set(f.data.subarray(0, f.len));
+    f.data = grown;
+  }
+  f.data.set(bytes, f.pos);
+  f.pos = end; f.len = Math.max(f.len, end); f.changed = true;
+}
+// READ FILE: up to `len` bytes; fewer at the end of the file, which is an error.
+async function fileRead(num, len) {
+  const f = await fileFor(num, false);
+  if (!f) return null;
+  const got = f.data.slice(f.pos, Math.min(f.len, f.pos + len));
+  f.pos += got.length;
+  if (got.length < len) await diskError(1, num);
+  return got;
+}
+// INPUT# reads an item up to a comma, a carriage return, the end of the file or
+// 255 characters, skipping leading blanks and line feeds; quotes let an item
+// hold commas (manual, INPUT#). Null at the end of the file.
+async function fileInputItem(num) {
+  const f = await fileFor(num, false);
+  if (!f) return null;
+  const d = f.data, out = [];
+  while (f.pos < f.len && (d[f.pos] === 32 || d[f.pos] === 10)) f.pos++;
+  if (f.pos >= f.len) { await diskError(1, num); return null; }
+  if (d[f.pos] === 34) {
+    for (f.pos++; f.pos < f.len && d[f.pos] !== 34; ) out.push(d[f.pos++]);
+    while (f.pos < f.len && d[f.pos] !== 44 && d[f.pos] !== 13) f.pos++;
+  } else {
+    while (f.pos < f.len && d[f.pos] !== 44 && d[f.pos] !== 13 && out.length < 255) out.push(d[f.pos++]);
+  }
+  if (d[f.pos] === 44 || d[f.pos] === 13) f.pos++;
+  return macRomanToStr(out);
+}
+
+// Disk errors (manual, "Disk Errors"). ERROR is the code plus 256 times the
+// file number: 259 is "File Not Found Error in File #01". After ON ERROR GOSUB
+// 65535 the program checks ERROR itself; ON ERROR GOSUB label sends errors
+// there; otherwise ZBasic reports the error and asks whether to go on.
+const DISK_ERRORS = ['', 'End of File', 'Disk Full', 'File Not Found', 'File Not Open',
+                     'Bad File Name', 'Bad File Number', 'Write Only', 'Read Only'];
+let errorTrap = null;   // null: ZBasic reports errors; '': the program does; or a label
+async function diskError(code, num) {
+  if (errorTrap === null) {
+    const msg = `${DISK_ERRORS[code] || 'Disk'} Error in File #${String(Math.abs(num)).padStart(2, '0')}`;
+    console.warn(msg);
+    const go = await messageBox('⚠️', msg, [{label: 'Stop', value: 0}, {label: 'Continue', value: 1}], 1, 1);
+    if (!go) throw new Error('STOP');
+    return;
+  }
+  globalVars.error = ((num & 0xFF) << 8) | code;
+  if (errorTrap) await callEventHandler(errorTrap, globalVars, true);
+}
+
+// ── The Standard File dialog ──
+// FILES$(1, types$) puts up the Open dialog, listing the files of up to four
+// four-letter types (all files when types$ is ""); FILES$(0, prompt$, name$)
+// the Save dialog. They resolve to the chosen name, or "" when cancelled.
+// Mode 'manage' is the toolbar's Documents button, outside any program.
+function fileDialog({mode, types = [], prompt = '', name = ''}) {
+  return openModal((box, finish) => {
+    const el = (tag, cls, text) => {
+      const e = document.createElement(tag);
+      if (cls) e.className = cls;
+      if (text != null) e.textContent = text;
+      return e;
+    };
+    box.classList.add('sf');
+    let sel = null, confirm = null;
+    const title = el('div', 'sf-title', mode === 'open' ? 'Open' : mode === 'save' ? prompt || 'Save as:' : 'Documents');
+    const list = el('div', 'sf-list');
+    list.tabIndex = 0;
+    const side = el('div', 'sf-side');
+    const body = el('div', 'sf-body');
+    body.append(list, side);
+    const input = mode === 'save' ? el('input', 'sf-name') : null;
+    const note = el('div', 'sf-note');
+    const setNote = (text, warn = false) => {
+      note.textContent = text ?? 'Documents are kept in this browser. Import and Export move them to and from your computer.';
+      note.classList.toggle('warn', warn);
+    };
+    setNote();
+    box.append(title, body);
+    if (input) { input.value = name; box.append(input); }
+    box.append(note);
+
+    const files = () => Object.values(disk())
+      .filter(f => mode !== 'open' || !types.length || types.includes(f.type))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    const button = (label, fn, isDefault) => {
+      const b = el('button', 'mac-alert-btn' + (isDefault ? ' default' : ''), label);
+      b.onclick = fn;
+      side.append(b);
+      return b;
+    };
+    const ok = () => {
+      if (mode === 'open') { if (sel) finish(sel); return; }
+      const n = input.value.trim();
+      if (!n) return;
+      if (n.includes(':')) { setNote('A name cannot contain ":".', true); return; }
+      const old = diskGet(n);
+      if (old && confirm !== n) {
+        confirm = n;
+        setNote(`Replace the existing "${old.name}"? Click Save again to replace it.`, true);
+        return;
+      }
+      finish(n);
+    };
+    const pick = (n, open) => {
+      sel = n; confirm = null;
+      if (input && n) input.value = n;
+      setNote();
+      render();
+      if (open) ok();
+    };
+    let okBtn = null;
+    if (mode !== 'manage') okBtn = button(mode === 'open' ? 'Open' : 'Save', ok, true);
+    button(mode === 'manage' ? 'Close' : 'Cancel', () => finish(''), mode === 'manage');
+    side.append(el('hr'));
+    const picker = el('input');
+    picker.type = 'file';
+    picker.multiple = true;
+    picker.hidden = true;
+    picker.onchange = async () => {
+      let last = null;
+      for (const file of picker.files) last = await importFile(file, types[0] || 'TEXT');
+      picker.value = '';
+      if (last) pick(last);
+    };
+    side.append(picker);
+    button('Import…', () => picker.click());
+    const exportBtn = button('Export', () => { const f = sel && diskGet(sel); if (f) exportFile(f); });
+    let deleting = null;
+    const deleteBtn = button('Delete', () => {
+      if (!sel) return;
+      if (deleting !== sel) { deleting = sel; setNote(`Delete "${sel}"? This cannot be undone. Click Delete again to delete it.`, true); return; }
+      diskDelete(sel);
+      deleting = null;
+      pick(null);
+    });
+
+    function render() {
+      list.innerHTML = '';
+      const all = files();
+      if (sel && !all.some(f => f.name === sel)) sel = null;
+      if (!all.length) list.append(el('div', 'sf-empty', mode === 'open' ? 'No documents of this kind' : 'No documents'));
+      for (const f of all) {
+        const row = el('div', 'sf-item' + (f.name === sel ? ' sel' : ''));
+        row.append(el('span', null, f.name), el('span', 'sf-type', f.type));
+        row.onclick = () => pick(f.name);
+        row.ondblclick = () => pick(f.name, true);
+        list.append(row);
+      }
+      if (okBtn && mode === 'open') okBtn.disabled = !sel;
+      exportBtn.disabled = deleteBtn.disabled = !sel;
+      if (deleting !== sel) deleting = null;
+    }
+    render();
+    setTimeout(() => { if (input) { input.focus(); input.select(); } else list.focus(); });
+    return e => {
+      if (e.key === 'Escape') { e.preventDefault(); finish(''); }
+      else if (e.key === 'Enter') { e.preventDefault(); if (mode === 'manage') finish(''); else ok(); }
+      else if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && document.activeElement !== input) {
+        e.preventDefault();
+        const names = files().map(f => f.name);
+        const i = names.indexOf(sel) + (e.key === 'ArrowDown' ? 1 : -1);
+        if (names.length) pick(names[Math.max(0, Math.min(names.length - 1, i))]);
+      }
+    };
+  }, '', mode !== 'manage');
 }
 
 // ── Dialog helpers ────────────────────────────────────────────

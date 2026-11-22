@@ -245,16 +245,20 @@ whileLoop = "WHILE"i __ condition:expression _ separator body:block _ "WEND"i
 doLoop = "DO"i _ separator body:block _ "UNTIL"i __ condition:expression
   { return {type: "do_while", condition, body}; }
 // ON <event> GOSUB handler installs a trap; ON <expr> GOSUB a,b,c is the
-// computed branch. Only ON TIMER carries an argument.
+// computed branch. Only ON TIMER carries an argument. ON ERROR GOSUB 65535
+// turns disk-error trapping over to the program and ON ERROR RETURN gives it
+// back to ZBasic (manual, "Disk Errors").
 onStmt = "ON"i __ "TIMER"i _ "(" _ interval:expression _ ")" __ cmd:branchCmd _ target:labelRef
   { return {type: "onEvent", event: "TIMER", cmd, handler: target, interval}; }
+  / "ON"i __ "ERROR"i __ "RETURN"i ![a-zA-Z0-9_%&!#$]
+  { return {type: "onEvent", event: "ERROR", cmd: "RETURN", handler: null}; }
   / "ON"i __ event:trapEvent ![a-zA-Z0-9_%&!#$] __ cmd:branchCmd _ target:labelRef
   { return {type: "onEvent", event, cmd, handler: target}; }
   / "ON"i __ expr:expression __ "RETURN"i ![a-zA-Z0-9_%&!#$]
   { return {type: "on", expr, cmd: "RETURN", targets: []}; }
   / "ON"i __ expr:expression __ cmd:branchCmd _ targets:gotoTargets
   { return {type: "on", expr, cmd, targets}; }
-trapEvent = e:("MENU"i / "DIALOG"i / "MOUSE"i / "STOP"i / "TIMER"i / "EVENT"i / "EDIT"i / "BREAK"i)
+trapEvent = e:("MENU"i / "DIALOG"i / "MOUSE"i / "STOP"i / "TIMER"i / "EVENT"i / "EDIT"i / "BREAK"i / "ERROR"i)
   { return e.toUpperCase(); }
 branchCmd = c:("GOSUB"i / "GOTO"i) { return c.toUpperCase(); }
 gotoTargets = head:labelRef tail:(_ "," _ labelRef)*
