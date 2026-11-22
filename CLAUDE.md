@@ -127,9 +127,32 @@ Each of these was a bug; the code comments carry the details and evidence.
 | CDraw | `CurveDraw45.bas.detok.txt` | `CDraw45.txt` is a 2000 export half-translated to another BASIC — do not use it |
 | Grglflx | `grglflx27.txt` | the application is v27; `grglflx28.bas` is later work in progress |
 | MacPThy | `PThy 1.1.detok.txt` | identical to `PThy 1.1.txt`, which lost the final RETURN |
-| Supermarket | `Supermarket.MAIN` | a PG:PRO project: `INCLUDE`s and `GLOBALS` files, windows built from `pG3*` resources |
+| Supermarket | `Supermarket.MAIN` | a PG:PRO project: `INCLUDE`s and `GLOBALS` files, windows built from `pG3*` resources; see "PG:PRO" below |
 
 `progs/extracted/DosPThy` is GW-BASIC (the DOS edition), not ZBasic.
+
+## PG:PRO
+
+Supermarket is built on PG:PRO, a framework whose runtime is ZBasic source
+shipped with the program (`PG PRO.INCL`, `.GLBL`, `@Header.INCL`). Most of it
+runs as written: its event dispatch, menus (`pGautoMenu`, `pGfixMenus`), the
+File menu, closing windows (`pGcloseWindow`, `pGcloseAll`). Two parts are
+emulated in `index.html` instead, and their PG:PRO functions are not run:
+building windows (`pGbuild`, in `execUserFuncCall`) and the object layer — the
+buttons, fields and pictures of `pG3c` resources, which `buildPgObjects` turns
+into real controls (the `PG_NATIVE` list). Things that came up getting the
+rest to run:
+
+- `DEF FN name USING ptr&` declares a function called through a pointer;
+  PG:PRO declares all 43 of its functions that way and then defines each with
+  a `LOCAL FN` of the same name. The declaration must not replace the
+  function (`isPrototypeOf`).
+- `GLOBALS GOSUB label` inside a LOCAL FN returns to the next statement.
+- Menu handles are real (`menuHandle`): PG:PRO reads a menu's id and title
+  out of its MenuInfo record. Menu calls accept a handle or an id (`menuIdOf`).
+- Its compiled runtime's constants are not in any source. Where a value is
+  only a selector, a stand-in is used, as for the `WINDOW()` selectors; see
+  the comments in the constant table in `runProgram`.
 
 ## Not implemented
 
@@ -138,9 +161,6 @@ Printing, the clipboard, random-access files (`READ#`/`WRITE#`, `RECORD`),
 `unsupported` / `undefined:` console messages, which are the first thing to
 look at when a program misbehaves.
 
-Supermarket's File menu does nothing: PG:PRO recognises it by reading the
-menu's title out of its MenuInfo record (`PSTR$([mHndl&] + _menuData)`), and
-menu handles here are bare menu ids (`menuDefs[id]`) with no record behind
-them. Its Open and Save would do nothing anyway — the program's own
-`"Action:Main"` leaves `_mainOpen` and `_mainSave` empty, and its unused
-`FN openFile` tests a misspelt `fldHnld&`.
+Supermarket's Open and Save put up their dialogs and then do nothing, as on
+the Mac: the program's own `"Action:Main"` leaves `_mainOpen` and `_mainSave`
+empty (and its unused `FN openFile` tests a misspelt `fldHnld&`).

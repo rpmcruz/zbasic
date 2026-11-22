@@ -165,10 +165,16 @@ body {
   width: 11px; height: 11px;
   border: 1px solid #000;
   background: #fff;
+  color: #000;
   cursor: pointer;
 }
 .win-tab-close::before { content: ''; position: absolute; inset: -6px; }   /* easier to hit */
-.win-tab-close:hover { background: #000; }
+.win-tab-close::after {   /* a cross, so the Mac's close box also reads as "close" today */
+  content: ''; position: absolute; inset: 1px;
+  background: linear-gradient(45deg, transparent 42%, currentColor 42% 58%, transparent 58%),
+              linear-gradient(-45deg, transparent 42%, currentColor 42% 58%, transparent 58%);
+}
+.win-tab-close:hover { background: #000; color: #fff; }
 
 /* ── Canvas wrapper — contains the scaled window ─────────── */
 #canvas-wrapper {
@@ -981,9 +987,18 @@ function setOutputWindow(id) {
   ctx    = windowDefs[id].ctx;
 }
 
+// Rebuilt only when a window, a title or the front window changes. MacPThy
+// runs `WINDOW #3` on every pass of its Instructions loop; rebuilding each time
+// replaced the tabs between a press and its release, and a click whose press
+// and release land on different elements is no click — so the close box, and
+// every tab, ignored a real mouse.
+let tabsSig = null;
 function renderTabs() {
   const bar = document.getElementById('tab-bar');
   const ids = Object.keys(windowDefs).map(Number).sort((a, b) => a - b);
+  const sig = ids.map(id => `${id}:${windowDefs[id].title}`).join('\n') + `\n${frontWindowId}`;
+  if (sig === tabsSig) return;
+  tabsSig = sig;
   bar.innerHTML = '';
   for (const id of ids) {
     const t = document.createElement('div');
@@ -1989,6 +2004,34 @@ const menuDefs = {};
 // Supermarket's MBAR lists Options before Help even though Options is menu 7 and
 // Help is menu 6, and the Mac's menu bar follows the MBAR (or the sequence of
 // InsertMenu calls), never the numbering.
+// A menu handle leads to a MenuInfo record (Inside Macintosh): the menu's id
+// at offset 0, its enable flags at 10 (bit 0 the menu, bit n item n) and its
+// title, a Pascal string, at 14 (_menuData). PG:PRO finds its menus by reading
+// them — `PSTR$([mHndl&] + _menuData)`, `{[mHndl&]}` — and with the bare menu
+// id standing in for the handle it read nothing, so Supermarket's whole File
+// menu (Open, Close, Save, Quit) was ignored. The record is refreshed whenever
+// a handle is handed out; menu calls take a handle or an id (menuIdOf).
+const menuHandles = new Map();   // menu id → handle, for the current run
+const menuIds = new Map();       // handle → menu id
+const menuIdOf = h => menuIds.get(h) ?? h;
+function menuHandle(id) {
+  let h = menuHandles.get(id);
+  if (!h) {
+    h = fakeMalloc(4);
+    fakeWriteU32(h, fakeMalloc(14 + 256));
+    menuHandles.set(id, h);
+    menuIds.set(h, id);
+  }
+  const m = menuDefs[id], rec = fakeReadU32(h);
+  let flags = m?.enabled === false ? 0 : 1;
+  for (const [i, it] of Object.entries(m?.items ?? {})) if (it.enabled && Number(i) < 32) flags |= 1 << Number(i);
+  const title = strToMacRoman(m?.title ?? '').slice(0, 255);
+  fakeWriteU16(rec, id);
+  fakeWriteU32(rec + 10, flags >>> 0);
+  fakeWriteBytes(rec + 14, [title.length, ...title]);
+  return h;
+}
+
 let menuSeq = 0;
 function makeMenu(title, extra) {
   return {title, enabled: true, items: {}, order: menuSeq++, ...extra};
@@ -2605,6 +2648,7 @@ let onEventHandler = null;
 // Supermarket uses this to reject non-digits in the checkout limit fields, and
 // to set the flag that makes it re-read them.
 let onEditHandler = null;
+const pushStack = [];   // PUSH / POP
 let teKey = '';
 let pendingEditKey = null;   // {fieldId, key, el} awaiting the handler's verdict
 let onStopHandler = null;
@@ -2892,7 +2936,7 @@ async function runProgram() {
   destroyAllCtrls();
   onMenuHandler = null; onDialogHandler = null; onMouseHandler = null;
   onTimerHandler = null; onEventHandler = null; onStopHandler = null;
-  onEditHandler = null; teKey = ''; pendingEditKey = null;
+  onEditHandler = null; teKey = ''; pendingEditKey = null; pushStack.length = 0;
   handlerDepth = 0; dialogOn = false; mouseOn = false; timerOn = false; menuOn = false; eventOn = false; currentDialogEventCode = null; currentDialogEvent = null;
   if (timerHandle) { clearInterval(timerHandle); timerHandle = null; } timerInterval = 0;
   Object.keys(regionStore).forEach(k => delete regionStore[k]);
@@ -2901,6 +2945,7 @@ async function runProgram() {
   Object.keys(windowClip).forEach(k => delete windowClip[k]);
   Object.keys(teHandleMap).forEach(k => delete teHandleMap[k]);
   fakeMemBlocks.length = 0; nextFakeAddr = 0x10000; _wMgrPort = 0; resHandles = new Map(); varMem = null;
+  menuHandles.clear(); menuIds.clear();
   Object.keys(varPtrBlocks).forEach(k => delete varPtrBlocks[k]); varPtrAnon = 0;
   Object.keys(dimGroups).forEach(k => delete dimGroups[k]);
   // Mac OS low-memory globals block (addresses 0x0000–0x0FFF).
@@ -2984,6 +3029,17 @@ async function runProgram() {
     // and with these constants sitting on -1…-9 that test answered for the wrong
     // thing and every close box reported "window does not exist" instead.
     '_activewnd': -101, '_outputwnd': -102, '_outputwclass': -103,
+    // The same for SYSTEM(): every resource file here has reference 0 (see
+    // CURRESFILE, HOMERESFILE), and no program was opened with documents.
+    '_aplres': -201, '_aplflag': -202,
+    // AppParmHandle, the low-memory global listing the documents an application
+    // was opened with (Inside Macintosh: $AEC). It reads 0: none.
+    '_appparmhandle': 0xAEC,
+    // pG3w window attributes "centre on screen" and "reopen where it was
+    // closed", also from PG:PRO's runtime. pGbuild is ours (see
+    // execUserFuncCall), so only pGcloseWindow tests them, to write a closed
+    // window's position back into its resource — which cannot be kept here.
+    '_opencntrmask': 0, '_openprevmask': 0,
     '_wndpointer': -104, '_efnum': -105, '_lastefnum': -106,
     '_selstart': -107, '_selend': -108, '_eftextlen': -109,
     // EDIT FIELD types. PG:PRO's own test for an editable field is
@@ -3062,6 +3118,15 @@ function stopProgram() {
   return runFinished;
 }
 
+// `DEF FN pGautoMenu(menuID,itemID) USING GLBLautoMenu&` declares a function
+// called through a pointer, so code can call it before its LOCAL FN is
+// compiled; the pointer is then set to that same function (`GLBLautoMenu& =
+// @FN pGautoMenu`). PG:PRO declares all 43 of its runtime functions this way.
+// Letting the declaration replace the real function made every one of them
+// return nothing — FN pGinitRuntime, which sets the pointers, included — so
+// a declaration never displaces a function with a body of the same name.
+const isPrototypeOf = (stmt, defs) => !!(stmt.using && defs[stmt.name]?.body);
+
 // ── Collect pass (DATA + fn defs) ─────────────────────────────
 function collectPass(stmts, fns, data, equates) {
   if (!stmts) return;
@@ -3076,7 +3141,7 @@ function collectPass(stmts, fns, data, equates) {
       equates.push(s);
     if (s.type === 'data') { for (const it of s.items) data.push(evalConstant(it)); }
     else if (s.type === 'function' || s.type === 'localFunction') { fns[s.name] = s; collectPass(s.body, fns, data, equates); }
-    else if (s.type === 'defFn') { fns[s.name] = s; }
+    else if (s.type === 'defFn') { if (!isPrototypeOf(s, fns)) fns[s.name] = s; }
     else if (s.type === 'if') { collectPass(s.body, fns, data, equates); if (s.else) collectPass(s.else, fns, data, equates); }
     else if (s.type === 'for' || s.type === 'while' || s.type === 'do_while') collectPass(s.body, fns, data, equates);
     else if (s.type === 'select') { for (const c of s.cases) collectPass(c.body, fns, data, equates); }
@@ -3160,7 +3225,7 @@ async function execStmt(stmt, env) {
     case 'include':       return execBlock(stmt.body, env);
     case 'end':           throw new Error('END');
     case 'function': case 'localFunction': funcDefs[stmt.name] = stmt; return;
-    case 'defFn': funcDefs[stmt.name] = stmt; return;
+    case 'defFn': if (!isPrototypeOf(stmt, funcDefs)) funcDefs[stmt.name] = stmt; return;
     case 'dim': return execDim(stmt, env);
     case 'def':
       // DEF name = expr is a compile-time equate, except for DEF MOUSE, which
@@ -3720,6 +3785,8 @@ function scrollTextIfNeeded() {
 
 // Map a Mac font number (from TEXT font,size,…) to a CSS family. Drawing and
 // FN STRINGWIDTH must agree, or text the program centres itself lands wrong.
+const MAC_FONT_NAMES = {0: 'Chicago', 2: 'New York', 3: 'Geneva', 4: 'Monaco', 5: 'Venice', 6: 'London',
+                        7: 'Athens', 16: 'Palatino', 20: 'Times', 21: 'Helvetica', 22: 'Courier', 23: 'Symbol'};
 const MAC_FONTS = {0: "'Chicago', 'Geneva', sans-serif", 2: "'New York', Georgia, serif",
                    3: "'Geneva', 'Helvetica', sans-serif", 4: "'Monaco', 'Courier New', monospace",
                    20: "'Times New Roman', Times, serif", 21: "'Helvetica', Arial, sans-serif",
@@ -4059,6 +4126,11 @@ async function execSysCall(stmt, env) {
     }
 
     case 'GET': {
+      // GET WINDOW n, wPtr& — the window's WindowPtr. Windows have no record in
+      // emulated memory (WINDOW(_wndPointer) is 0 as well), so it is 0, which
+      // PG:PRO's pGgetWTitle takes as "no window title to read".
+      if (stmt.keyword === 'WINDOW') { if (args[1]?.name) await storeInto(args[1], 0, env); return; }
+      if (stmt.keyword) { console.log(`unsupported: GET ${stmt.keyword}`); return; }
       // GET (x1,y1)-(x2,y2), ArrayName(index) — capture screen region to sprite buffer
       if (!ctx) return;
       const a0 = args[0], a1 = args[1];
@@ -4437,20 +4509,10 @@ async function execSysCall(stmt, env) {
         enabled = Number(await a(2));
         title   = args[3] ? String(await a(3)) : null;
         if (menuId === 0) return;
-        // MENU menuId,-2,1 — insert sub-menu from MENU resource
-        if (itemId === -2) {
-          const menus = macResources['MENU'] ?? [];
-          const menuRes = menus.find(m => m.id === menuId);
-          if (menuRes) {
-            const {title: mTitle, items} = parseMENU(menuRes.data);
-            menuDefs[menuId] = makeMenu(mTitle);
-            items.forEach((it, idx) => {
-              menuDefs[menuId].items[idx + 1] = {title: it.name, enabled: it.enabled, checked: false};
-            });
-            renderMenuBar();
-          }
-          return;
-        }
+        // MENU menuId,-2,1 — install the hierarchical menu of that MENU resource.
+        // It hangs off an item of another menu; it is not a menu-bar title.
+        // (PG:PRO's pGinitRuntime does this for Supermarket's submenus 75-78.)
+        if (itemId === -2) { installSubmenu(menuId); renderMenuBar(); return; }
         if (title !== null) {
           // Pass the state through as a number: setMenu reads 0 as disabled and
           // 2 as checked, so coercing to a boolean lost every `_checked` that
@@ -4534,8 +4596,17 @@ async function execSysCall(stmt, env) {
     }
 
     case 'GLOBALS': {
-      // GLOBALS GOSUB label / GLOBALS GOTO label — call subroutine in global context
-      if (stmt.keyword === 'GOSUB' && args[0]) throw new GosubSignal(labelOf(args[0]));
+      // GLOBALS GOSUB label — a GOSUB run in the global scope, from inside a
+      // LOCAL FN. It has to return to the statement after it, like GOSUB: as a
+      // thrown signal it was caught outside the function, which then abandoned
+      // the rest of the function — PG:PRO's pGcloseAll closed one window and
+      // never reported back, so File > Quit never quit.
+      if (stmt.keyword === 'GOSUB' && args[0]) {
+        const lbl = labelOf(args[0]);
+        if (await callEventHandler(lbl, globalVars, true)) return;
+        throw new GosubSignal(lbl);
+      }
+      // GLOBALS GOTO label
       if (stmt.keyword === 'GOTO'  && args[0]) throw new GotoSignal(labelOf(args[0]));
       // GLOBALS "filename" — execute the GLBL file's DIM/equate statements
       if (args[0]?.type === 'literal' && typeof args[0].value === 'string') {
@@ -4654,6 +4725,18 @@ async function execSysCall(stmt, env) {
       return;
     }
 
+    // PUSH WORD(@v) … POP WORD(@v) (or LONG): keep a variable's value on a
+    // stack across a GOSUB and put it back. PG:PRO's close-box routine keeps
+    // gWhichWindow this way around the program's own window handler.
+    case 'PUSH': case 'POP': {
+      const ref = args[0]?.args?.[0];
+      const v = ref?.type === 'unary' && ref.operator === '@' ? ref.expression : null;
+      if (!v?.name) return;
+      if (cmd === 'PUSH') pushStack.push(readVar(env, v.name));
+      else if (pushStack.length) writeVar(env, v.name, pushStack.pop());
+      return;
+    }
+
     // POKE address, byte — and POKE WORD (`%`) and POKE LONG (`&`), big-endian.
     case 'POKE': case 'POKE BYTE': case 'POKE WORD': case '%': case 'POKE LONG': case '&': {
       const addr = Math.floor(await n(0)), v = Math.trunc(await n(1));
@@ -4700,7 +4783,7 @@ async function execSysCall(stmt, env) {
     case 'SPEED': case 'LPRINT': case 'LLIST':
     case 'HPLOT': case 'HCOLOR': case 'HGRAPH': case 'SCRN':
     case 'FLASH': case 'RESUME':
-    case 'ROUTE': case 'RATIO': case 'PUSH':
+    case 'ROUTE': case 'RATIO':
     case 'RANDOM':
       return;
 
@@ -4985,7 +5068,7 @@ async function execProcCall(stmt, env) {
       }
       return;
     case 'appendmenu': {
-      const handle = Math.floor(Number(await ev(0))) || 0;
+      const handle = menuIdOf(Math.floor(Number(await ev(0))) || 0);
       const itemStr = String((await ev(1)) ?? '');
       if (!menuDefs[handle]) menuDefs[handle] = makeMenu('');
       const startIdx = Math.max(0, ...Object.keys(menuDefs[handle].items).map(Number)) + 1;
@@ -4994,7 +5077,7 @@ async function execProcCall(stmt, env) {
     }
     case 'insertmenu': { renderMenuBar(); return; }
     case 'enableitem': {
-      const handle = Math.floor(Number(await ev(0))) || 0;
+      const handle = menuIdOf(Math.floor(Number(await ev(0))) || 0);
       const item   = Math.floor(Number(await ev(1))) || 0;
       if (menuDefs[handle]) {
         if (item === 0) menuDefs[handle].enabled = true;
@@ -5004,7 +5087,7 @@ async function execProcCall(stmt, env) {
       return;
     }
     case 'disableitem': {
-      const handle = Math.floor(Number(await ev(0))) || 0;
+      const handle = menuIdOf(Math.floor(Number(await ev(0))) || 0);
       const item   = Math.floor(Number(await ev(1))) || 0;
       if (menuDefs[handle]) {
         if (item === 0) menuDefs[handle].enabled = false;
@@ -5014,7 +5097,7 @@ async function execProcCall(stmt, env) {
       return;
     }
     case 'checkitem': {
-      const handle  = Math.floor(Number(await ev(0))) || 0;
+      const handle  = menuIdOf(Math.floor(Number(await ev(0))) || 0);
       const item    = Math.floor(Number(await ev(1))) || 0;
       const checked = !!(await ev(2));
       if (menuDefs[handle]?.items[item]) {
@@ -5025,7 +5108,7 @@ async function execProcCall(stmt, env) {
     }
     case 'getitem': {
       // CALL GETITEM(hMenu, item, str$) — get menu item title into a string variable
-      const handle = Math.floor(Number(await ev(0))) || 0;
+      const handle = menuIdOf(Math.floor(Number(await ev(0))) || 0);
       const item   = Math.floor(Number(await ev(1))) || 0;
       const strArg = stmt.args?.[2];
       if (strArg?.type === 'variable' && menuDefs[handle]?.items[item]) {
@@ -5036,7 +5119,7 @@ async function execProcCall(stmt, env) {
     case 'setitemstyle': return;  // menu item text style — not modelled
     case 'addresmenu': {
       // CALL ADDRESMENU(hMenu, type&) — append one item per resource of that type.
-      const handle = Math.floor(Number(await ev(0))) || 0;
+      const handle = menuIdOf(Math.floor(Number(await ev(0))) || 0);
       const type   = await resTypeOf(stmt.args?.[1], env);
       if (!menuDefs[handle]) menuDefs[handle] = makeMenu('');
       let idx = Math.max(0, ...Object.keys(menuDefs[handle].items).map(Number));
@@ -5047,18 +5130,23 @@ async function execProcCall(stmt, env) {
       renderMenuBar();
       return;
     }
+    // CALL GETFNUM(name$, fontNum) and CALL GETFONTNAME(fontNum, name$) —
+    // between Mac font names and font numbers. Font 1 is the application font.
     case 'getfnum': {
-      // CALL GETFNUM(name$, fontNum) — resolve a font name to its Mac font ID.
-      const fonts = {chicago: 0, geneva: 3, monaco: 4, venice: 5, london: 6,
-                     athens: 7, 'new york': 2, times: 20, helvetica: 21, courier: 22,
-                     symbol: 23, palatino: 16};
       const nm = String((await ev(0)) ?? '').toLowerCase().trim();
       const outArg = stmt.args?.[1];
-      if (outArg?.type === 'variable') writeVar(env, outArg.name, fonts[nm] ?? 0);
+      const num = Object.entries(MAC_FONT_NAMES).find(([, n]) => n.toLowerCase() === nm)?.[0];
+      if (outArg?.name) await storeInto(outArg, Number(num ?? 0), env);
+      return;
+    }
+    case 'getfontname': {
+      const num = Math.floor(Number(await ev(0))) || 0;
+      const outArg = stmt.args?.[1];
+      if (outArg?.name) await storeInto(outArg, MAC_FONT_NAMES[num === 1 ? 3 : num] ?? '', env);
       return;
     }
     case 'deletemenu': case 'disposemenu': {
-      const handle = Math.floor(Number(await ev(0))) || 0;
+      const handle = menuIdOf(Math.floor(Number(await ev(0))) || 0);
       if (menuDefs[handle]) { delete menuDefs[handle]; renderMenuBar(); }
       return;
     }
@@ -5574,7 +5662,7 @@ async function execProcCall(stmt, env) {
 
     case 'setitem': {
       // CALL SETITEM(hMenu, item, str$) — set menu item title
-      const handle = Math.floor(Number(await ev(0))) || 0;
+      const handle = menuIdOf(Math.floor(Number(await ev(0))) || 0);
       const item   = Math.floor(Number(await ev(1))) || 0;
       const title  = String((await ev(2)) ?? '');
       if (menuDefs[handle]?.items[item]) {
@@ -5771,6 +5859,18 @@ async function bindArgs(fn, local, args, env) {
   });
 }
 
+// PG:PRO's object layer — the buttons, fields, pictures and scroll bars its
+// windows are built from (pG3c resources) — is emulated natively, like pGbuild
+// below: buildPgObjects makes real controls of them. PG:PRO's own functions for
+// that layer read, draw and hit-test object records that do not exist here, so
+// running them over the emulation fights it (windows stopped closing, typed
+// checkout limits were lost); they are not run. The rest of its runtime — the
+// menus, the File menu, closing windows — runs as written.
+const PG_NATIVE = new Set(['pgcountobj', 'pggetobj', 'pgputobj', 'pggetref', 'pggettext$',
+  'pgdrawcontrols', 'pgframebtn', 'pggetgroup', 'pgsetgroup', 'pgpointinobj', 'pgdepthofpoint',
+  'pguseobjcolor', 'pgfield', 'pgtab', 'pgfixeditor', 'pgbtnaction', 'pgmouse', 'pgupdate',
+  'pgcursor', 'pgblackandwhite']);
+
 async function execUserFuncCall(stmt, env) {
   // Intercept pGbuild — the actual LOCAL FN body never pushes a window-update
   // event (it relies on Mac OS event machinery). We create the window and push
@@ -5805,6 +5905,7 @@ async function execUserFuncCall(stmt, env) {
     }
     return null;
   }
+  if (PG_NATIVE.has(stmt.name)) return 0;
   const fn = funcDefs[stmt.name];
   // Anything that is not one of the program's own functions is a built-in or
   // a Toolbox function — the same table a bare name(...) call goes through.
@@ -6317,7 +6418,7 @@ async function evalCallable(node, env, fnCall = false) {
     }
     case 'curresfile': return 0;
     case 'countmitems': {
-      const handle = Math.floor(Number(await N(0))) || 0;
+      const handle = menuIdOf(Math.floor(Number(await N(0))) || 0);
       return menuDefs[handle] ? Object.keys(menuDefs[handle].items).length : 0;
     }
     case 'handtohand': return 0;
@@ -6335,15 +6436,14 @@ async function evalCallable(node, env, fnCall = false) {
       const title  = String((await A(1)) ?? '');
       menuDefs[menuId] = makeMenu(title);
       renderMenuBar();
-      return menuId;
+      return menuHandle(menuId);
     }
     case 'getmenubar':
       savedMenuBar = JSON.parse(JSON.stringify(menuDefs));
       return 1;
     case 'getmhandle': {
-      // Return the menu ID as its own "handle" (we use IDs directly)
       const mid = Math.floor(Number(await A(0))) || 0;
-      return mid;
+      return menuDefs[mid] ? menuHandle(mid) : 0;
     }
     case 'getresource': case 'get1resource': {
       // FN GETRESOURCE(type&, id%) — a handle to the resource's bytes, or 0

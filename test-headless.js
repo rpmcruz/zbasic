@@ -19,6 +19,7 @@
 //   await sleep(3000); h.controlStore['1:1'].el.listeners.keydown[0]({key: '2', preventDefault() {}});
 // h.menu(menu, item) picks a menu item, and h.modal() is the alert or file
 // dialog on top, if any: its text, click(label), pick(name) and type(text).
+// h.trace(n) logs the next n statements the program executes.
 // Documents last for the run (h.disk() lists them).
 const {Worker, isMainThread, workerData, parentPort} = require("worker_threads");
 const fs = require("fs"), path = require("path"), vm = require("vm");
@@ -90,6 +91,8 @@ function worker() {
       canvas, font: "12px x", fillStyle: "#000", strokeStyle: "#000", lineWidth: 1,
       measureText: t => ({width: String(t).length * (parseFloat(ctx.font) || 12) * 0.6}),
       getImageData: (x, y, w, h) => {
+        // Chrome rejects a coordinate that is not a number; so must we.
+        if (![x, y, w, h].every(Number.isFinite)) throw new TypeError(`getImageData(${x}, ${y}, ${w}, ${h})`);
         w = Math.max(1, w | 0); h = Math.max(1, h | 0);
         return {width: w, height: h, data: new Uint8ClampedArray(w * h * 4).fill(255)};
       },
@@ -168,7 +171,9 @@ function worker() {
     }
     Atomics.store(shared, 0, id); Atomics.add(shared, 1, 1);
     hot.set(id, (hot.get(id) || 0) + 1);
+    if (tracing > 0) { tracing--; log(`  | ${text[id].slice(0, 160)}`); }
   };
+  let tracing = 0;
   src += `\n;globalThis.__h = { get running() { return running; }, windowDefs, controlStore, menuDefs,
     get globalVars() { return globalVars; }, get eventQueue() { return eventQueue; },
     get outputWindowId() { return outputWindowId; }, get frontWindowId() { return frontWindowId; },
@@ -177,6 +182,7 @@ function worker() {
   const h = context.__h;
   const descendants = (e, out = []) => { for (const c of e.children) { out.push(c); descendants(c, out); } return out; };
   h.menu = (menu, item) => h.pushEvent('menu', {menu, item});
+  h.trace = n => { tracing = n; };   // log the next n statements executed
   h.disk = () => Object.values(context.disk()).map(f => `${f.name} (${f.type}, ${f.data.length} bytes)`);
   h.modal = () => {
     const back = document.body.children.filter(c => c.classList.contains('mac-alert-back')).pop();
