@@ -71,8 +71,7 @@ One file, top to bottom:
 7. **Disk files** — the documents programs save (`disk()`, kept in
    localStorage), OPEN/CLOSE/PRINT#/INPUT#/READ FILE/WRITE FILE on open file
    numbers, disk errors and ON ERROR (`diskError`), and the Standard File
-   dialog FILES$ puts up (`fileDialog`), which is also the toolbar's
-   Documents manager.
+   dialog FILES$ puts up (`fileDialog`).
 
 ## ZBasic semantics that are easy to get wrong
 

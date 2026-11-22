@@ -94,6 +94,7 @@ body {
 }
 .dyn-menu:hover, .dyn-menu.open { background: #000; color: #fff; }
 .dyn-menu.dis { pointer-events: none; color: #aaa; cursor: default; }
+.dyn-menu.off, .dyn-menu.off:hover, .dyn-menu.off.open { color: #aaa; }
 .dyn-menu-drop {
   display: none;
   position: absolute;
@@ -159,13 +160,15 @@ body {
 }
 .win-tab.active { background: #fff; font-weight: bold; color: #000; }
 .win-tab-close {
-  font-size: 10px;
-  line-height: 1;
+  position: relative;
+  flex: 0 0 auto;
+  width: 11px; height: 11px;
+  border: 1px solid #000;
+  background: #fff;
   cursor: pointer;
-  opacity: 0.5;
-  padding: 1px 2px;
 }
-.win-tab-close:hover { opacity: 1; }
+.win-tab-close::before { content: ''; position: absolute; inset: -6px; }   /* easier to hit */
+.win-tab-close:hover { background: #000; }
 
 /* ── Canvas wrapper — contains the scaled window ─────────── */
 #canvas-wrapper {
@@ -247,7 +250,7 @@ body {
 }
 .mac-alert-btn.default { border-width: 3px; border-radius: 8px; font-weight: bold; }
 .mac-alert-btn:disabled { color: #aaa; cursor: default; }
-/* The Standard File dialog that FILES$ puts up, and the Documents manager. */
+/* The Standard File dialog that FILES$ puts up. */
 .mac-alert.sf { width: 440px; max-width: calc(100vw - 32px); }
 .sf-title { font-weight: bold; margin-bottom: 8px; white-space: pre-wrap; }
 .sf-body { display: flex; gap: 12px; }
@@ -341,7 +344,6 @@ body {
     <option value="">— no file loaded —</option>
   </select>
   <button class="tb-btn" id="btn-run" onclick="toggleRun()" disabled>Run</button>
-  <button class="tb-btn" id="btn-docs" onclick="fileDialog({mode: 'manage'})" title="The documents the programs have saved">Documents</button>
 </div>
 
 <div id="program-view">
@@ -992,20 +994,20 @@ function renderTabs() {
     // code 3), not just raise it. MacPThy dismisses its Instructions window
     // with `IF D0=3 THEN WINDOW DN : IF DN=1 THEN Reading=0` — with no event
     // the tab looked dead and the program could never be advanced.
-    label.onclick = () => {
+    t.onclick = () => {
       if (id === frontWindowId) return;
       bringToFront(id);
       if (running) pushEvent('dialog', {code: 3, winRef: id});
     };
+    // The close box sits at the left, as in a Mac title bar — MacPThy's
+    // instructions send the reader to "the little box at the top left-hand
+    // corner of the window". DIALOG(D0) reports the window through `winRef`.
     const x = document.createElement('span');
     x.className = 'win-tab-close';
-    x.textContent = '✕';
     x.title = 'Close window';
-    // DIALOG(D0) reports the reference through `winRef`; `windowId` was never
-    // read, so the close box reported whichever window happened to be in front.
     x.onclick = (e) => { e.stopPropagation(); pushEvent('dialog', {code: 4, winRef: id}); };
-    t.appendChild(label);
     t.appendChild(x);
+    t.appendChild(label);
     bar.appendChild(t);
   }
   bar.style.display = ids.length > 0 ? 'flex' : 'none';
@@ -1423,10 +1425,10 @@ function showAlert(alrtId, icon) {
 
 // A modal box with the alerts' look. fill(box, finish) builds its contents and
 // may return a keydown handler; the promise resolves with whatever finish() is
-// given. While a program is waiting on it, Stop dismisses it with `cancel`, or
-// the run could never be interrupted.
+// given. Stop dismisses it with `cancel`, or the program waiting on it could
+// never be interrupted.
 let alertResolve = null;
-function openModal(fill, cancel, waitedOn = true) {
+function openModal(fill, cancel) {
   const back = document.createElement('div');
   back.className = 'mac-alert-back';
   const box = document.createElement('div');
@@ -1445,7 +1447,7 @@ function openModal(fill, cancel, waitedOn = true) {
       resolve(v);
     };
     const stop = () => finish(cancel);
-    if (waitedOn) alertResolve = stop;
+    alertResolve = stop;
     onKey = fill(box, finish) || null;
     if (onKey) document.addEventListener('keydown', onKey, true);
     document.body.appendChild(back);
@@ -2029,7 +2031,7 @@ function menuDefsSignature() {
 // Build the item rows of one menu into `drop`. An item carrying a submenu gets
 // a nested drop-down instead of a click handler, and the nested items report
 // their own menu id, so MENU(0)/MENU(1) match the resource numbering.
-function fillMenuItems(drop, mid, depth = 0) {
+function fillMenuItems(drop, mid, depth = 0, off = false) {
   const m = menuDefs[mid];
   if (!m || depth > 4) return;
   const iids = Object.keys(m.items).map(Number).sort((a, b) => a - b);
@@ -2041,7 +2043,7 @@ function fillMenuItems(drop, mid, depth = 0) {
 
     const sub = it.submenu && menuDefs[it.submenu] ? it.submenu : null;
     el.className = 'dyn-menu-item'
-      + (it.enabled && it.title.trim() ? '' : ' dis')
+      + (it.enabled && it.title.trim() && !off ? '' : ' dis')
       + (sub ? ' has-sub' : '');
     const label = document.createElement('span');
     label.textContent = (it.checked ? '\u2713 ' : '\u00a0\u00a0\u00a0 ') + it.title;
@@ -2050,7 +2052,7 @@ function fillMenuItems(drop, mid, depth = 0) {
     if (sub) {
       const subDrop = document.createElement('div');
       subDrop.className = 'dyn-submenu-drop';
-      fillMenuItems(subDrop, sub, depth + 1);
+      fillMenuItems(subDrop, sub, depth + 1, off);
       el.appendChild(subDrop);
     } else {
       const _mid = mid, _iid = iid;
@@ -2082,8 +2084,13 @@ function renderMenuBar(force = false) {
     if (!m.title) continue;
     if (m.hier) continue;   // reachable only through its parent item
     const isBlankTitle = !m.title.trim();
+    // A disabled menu (MENU n,0,0) still pulls down, so its items can be read,
+    // but title and items are grey and none can be chosen. MacPThy disables
+    // both of its menus until its Instructions window is closed, and its text
+    // tells the reader as much; drawn as enabled, the menus just seemed broken.
+    const off = m.enabled === false;
     const wrap = document.createElement('div');
-    wrap.className = 'dyn-menu' + (isBlankTitle ? ' dis' : '');
+    wrap.className = 'dyn-menu' + (isBlankTitle ? ' dis' : '') + (off ? ' off' : '');
     wrap.dataset.menuId = mid;
     const titleSpan = document.createElement('span');
     titleSpan.textContent = m.title;
@@ -2091,7 +2098,7 @@ function renderMenuBar(force = false) {
     wrap.appendChild(titleSpan);
     const drop = document.createElement('div');
     drop.className = 'dyn-menu-drop';
-    fillMenuItems(drop, mid);
+    fillMenuItems(drop, mid, 0, off);
     wrap.appendChild(drop);
     if (!isBlankTitle) {
       wrap.addEventListener('click', e => {
@@ -6437,8 +6444,8 @@ function tone(freq, ms, volume = 1) {
 // each file tagged with a four-letter type and creator (DEF OPEN) that the
 // Open dialog filtered on: FILES$(1,"BIDr") lists only Price Theory's saved
 // screens. Here that disk is the browser's localStorage, shared by the
-// programs on this page; the file dialogs and the toolbar's Documents button
-// import files from the computer and export them back to it.
+// programs on this page; the file dialogs import files from the computer and
+// export them back to it.
 const DISK_KEY = 'zbasic-disk';
 const DISK_VOL = -1;   // the volume reference FILES$ hands back; only OPEN takes it
 let diskFiles = null;  // lowercased name → {name, type, creator, data: Uint8Array, date}
@@ -6595,7 +6602,6 @@ async function diskError(code, num) {
 // FILES$(1, types$) puts up the Open dialog, listing the files of up to four
 // four-letter types (all files when types$ is ""); FILES$(0, prompt$, name$)
 // the Save dialog. They resolve to the chosen name, or "" when cancelled.
-// Mode 'manage' is the toolbar's Documents button, outside any program.
 function fileDialog({mode, types = [], prompt = '', name = ''}) {
   return openModal((box, finish) => {
     const el = (tag, cls, text) => {
@@ -6606,7 +6612,7 @@ function fileDialog({mode, types = [], prompt = '', name = ''}) {
     };
     box.classList.add('sf');
     let sel = null, confirm = null;
-    const title = el('div', 'sf-title', mode === 'open' ? 'Open' : mode === 'save' ? prompt || 'Save as:' : 'Documents');
+    const title = el('div', 'sf-title', mode === 'open' ? 'Open' : prompt || 'Save as:');
     const list = el('div', 'sf-list');
     list.tabIndex = 0;
     const side = el('div', 'sf-side');
@@ -6652,9 +6658,8 @@ function fileDialog({mode, types = [], prompt = '', name = ''}) {
       render();
       if (open) ok();
     };
-    let okBtn = null;
-    if (mode !== 'manage') okBtn = button(mode === 'open' ? 'Open' : 'Save', ok, true);
-    button(mode === 'manage' ? 'Close' : 'Cancel', () => finish(''), mode === 'manage');
+    const okBtn = button(mode === 'open' ? 'Open' : 'Save', ok, true);
+    button('Cancel', () => finish(''));
     side.append(el('hr'));
     const picker = el('input');
     picker.type = 'file';
@@ -6690,7 +6695,7 @@ function fileDialog({mode, types = [], prompt = '', name = ''}) {
         row.ondblclick = () => pick(f.name, true);
         list.append(row);
       }
-      if (okBtn && mode === 'open') okBtn.disabled = !sel;
+      if (mode === 'open') okBtn.disabled = !sel;
       exportBtn.disabled = deleteBtn.disabled = !sel;
       if (deleting !== sel) deleting = null;
     }
@@ -6698,7 +6703,7 @@ function fileDialog({mode, types = [], prompt = '', name = ''}) {
     setTimeout(() => { if (input) { input.focus(); input.select(); } else list.focus(); });
     return e => {
       if (e.key === 'Escape') { e.preventDefault(); finish(''); }
-      else if (e.key === 'Enter') { e.preventDefault(); if (mode === 'manage') finish(''); else ok(); }
+      else if (e.key === 'Enter') { e.preventDefault(); ok(); }
       else if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && document.activeElement !== input) {
         e.preventDefault();
         const names = files().map(f => f.name);
@@ -6706,7 +6711,7 @@ function fileDialog({mode, types = [], prompt = '', name = ''}) {
         if (names.length) pick(names[Math.max(0, Math.min(names.length - 1, i))]);
       }
     };
-  }, '', mode !== 'manage');
+  }, '');
 }
 
 // ── Dialog helpers ────────────────────────────────────────────

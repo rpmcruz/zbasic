@@ -23,8 +23,8 @@ Or pick a program from the dropdown on the left and press Run.
 
 Programs that save their work — Curve Draw's hand-drawn curves, Price Theory's
 BI Draw screens — save it in your browser, through the same Open and Save
-dialogs the Mac had. The **Documents** button lists what has been saved, and
-**Export** and **Import** move a document to and from your computer.
+dialogs the Mac had; **Export** and **Import** in those dialogs move a
+document to and from your computer.
 
 ## How to run it locally
 
