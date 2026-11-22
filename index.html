@@ -4782,13 +4782,15 @@ async function execSysCall(stmt, env) {
     // DELAY expression — the expression is in milliseconds (Standard Reference).
     case 'DELAY': { const ms = await n(0); if (ms > 0) await sleepMs(ms); return; }
 
+    // SWAP var1, var2 — any two variables: simple ones, array elements, record
+    // fields. MacPThy keeps the curve being drawn in Y() by swapping arrays an
+    // element at a time (SWAP Y(I),Y1(I)); taking only simple variables left
+    // the swap undone, and DSM scored every demand curve against a flat line.
     case 'SWAP': {
-      if (args.length >= 2 && args[0].type === 'variable' && args[1].type === 'variable') {
-        const a_ = args[0].name, b_ = args[1].name;
-        const tmp = readVar(env, a_);
-        writeVar(env, a_, readVar(env, b_));
-        writeVar(env, b_, tmp);
-      }
+      if (args.length < 2 || !args[0]?.name || !args[1]?.name) return;
+      const va = await evalExpr(args[0], env), vb = await evalExpr(args[1], env);
+      await storeInto(args[0], vb, env);
+      await storeInto(args[1], va, env);
       return;
     }
     case 'INC': case 'DEC': {
