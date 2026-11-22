@@ -6342,7 +6342,9 @@ function levelIsReal(node) {
       return /[!#]$/.test(node.name || '');
     case 'callable': case 'call': case 'userFuncCall':
       // Arguments sit inside parentheses, so they belong to their own level;
-      // only the identity of the function matters here.
+      // only the identity of the function matters here — a scientific
+      // function, or a real array element or FN (BVal!(i), FN X6!(…)).
+      if (/[!#]$/.test(node.name || '')) return true;
       return SCI_FNS.has(String(node.name || '').toLowerCase().replace(/[!#%&$]$/, ''));
     case 'unary':
       return node.expression && !node.expression.paren && levelIsReal(node.expression);
@@ -6448,8 +6450,16 @@ async function evalBinary(node, env, lvlReal) {
     case 'AND': return (Number(L)|0) & (Number(R)|0);
     case 'OR':  return (Number(L)|0) | (Number(R)|0);
     case 'XOR': return (Number(L)|0) ^ (Number(R)|0);
-    case '<<': return (Number(L)|0) << (Number(R)|0);
-    case '>>': return (Number(L)|0) >> (Number(R)|0);
+    // Manual, SHIFT: "<<n Multiply by 2^n, >>n Divide by 2^n (n truncates to
+    // an integer number)", and "89.34<<2 = 357.36": on a real level a shift
+    // keeps the fraction. MacPThy stores its demand curve in fixed point as
+    // Surplus&(I)=Y!<<10, and shifting only the whole part made the marginal
+    // revenue curve it draws from it a sawtooth.
+    case '<<': case '>>': {
+      const n = Math.trunc(Number(R)) || 0, x = Number(L) || 0;
+      if (lvlReal) return node.operator === '<<' ? x * 2 ** n : x / 2 ** n;
+      return node.operator === '<<' ? (x | 0) << n : (x | 0) >> n;
+    }
     default: return 0;
   }
 }
