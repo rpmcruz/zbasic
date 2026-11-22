@@ -103,6 +103,22 @@ Each of these was a bug; the code comments carry the details and evidence.
   a 1-bit mask so drawing twice restores exactly (`paintXor`, `gfxTextXor`).
 - **Text**: `PRINT`/`STR$` put a blank before non-negative numbers.
   `CHR$`/`ASC` use Mac Roman codes.
+- **RETURN inside an FN leaves the function** (compiled ZBasic calls an FN
+  as a subroutine); it must not reach the caller's GOSUB.
+- **Controls make update events.** `BUTTON CLOSE`, and re-issuing a button
+  with its title, queue DIALOG(0) = 5 for the window (`queueUpdate`).
+  MacPThy's dialogs wait `WHILE D0<>1` without clearing D0 and rely on it.
+- **Toolbox records are written into the argument.** GETFONTINFO, GETPEN,
+  GETMOUSE fill the variables that start the record — a DIMmed run or array
+  elements — not fixed names (`writeWords`).
+- **Regions have shapes**: a bounding box plus a pixel mask (`rgnCombine`,
+  `rgnInset`, `rgnFromSegments` for OPENRGN/CLOSERGN outlines). FILLRGN takes
+  the program's 8x8 pattern; PAINTRGN uses the pen.
+- **Pixels.** Window canvases run at a fractional scale; rectangles are
+  snapped to device pixels (`windowContext`) so painting and erasing cancel.
+  Text uses Geneva stand-ins of Geneva's width (`GENEVA`, `--geneva`) because
+  programs size boxes for it. GET copies canvas to canvas and skips windows
+  that have not changed — MacPThy snapshots the window on every loop pass.
 - **Variables have addresses.** ZBasic lays every variable out at compile time,
   simple variables and then arrays, in the order the source first mentions
   them. CDraw and Grglflx save a document by writing the bytes from

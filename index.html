@@ -6,6 +6,11 @@
 <title>ZBasic</title>
 <style>
 * { box-sizing: border-box; margin: 0; padding: 0; }
+/* Programs size their text boxes for the Mac's Geneva, which is much wider
+   than Helvetica/Arial: with those, MacPThy's message boxes came out too
+   narrow for the buttons placed in them. Verdana (Windows) and DejaVu Sans
+   (Linux) have nearly Geneva's widths. Keep in step with MAC_FONTS. */
+:root { --geneva: 'Geneva', 'Verdana', 'DejaVu Sans', sans-serif; }
 body {
   background: #1a1a1a;
   font-family: system-ui, sans-serif;
@@ -215,7 +220,7 @@ body {
 .mac-ctrl {
   position: absolute;
   box-sizing: border-box;
-  font-family: 'Geneva', 'Helvetica', sans-serif;
+  font-family: var(--geneva);
   margin: 0;
   padding: 0;
 }
@@ -244,7 +249,7 @@ body {
   box-shadow: 3px 3px 0 rgba(0,0,0,.5);
   padding: 14px 16px 12px;
   min-width: 260px; max-width: 420px;
-  font-family: 'Geneva', 'Helvetica', sans-serif; font-size: 12px;
+  font-family: var(--geneva); font-size: 12px;
 }
 .mac-alert-body { display: flex; gap: 12px; align-items: flex-start; }
 .mac-alert-icon { font-size: 28px; line-height: 1; }
@@ -813,6 +818,36 @@ function renderTeDiv(rec) {
   rec.div.textContent = rec.text.replace(/\r/g, '\n');
 }
 
+// A window is drawn at CANVAS_SCALE device pixels per window pixel, which is
+// rarely a whole number, so a rectangle edge usually falls inside a device
+// pixel and is drawn there in grey. Painting the same rectangle white then
+// leaves grey behind (MacPThy erases each message box with BOX FILL, and the
+// old box's border stayed as a faint line through the next one). QuickDraw
+// paints whole pixels, so rectangles are snapped to device pixels: painted
+// and erased, they cancel exactly. The window's context is also made to count
+// its drawing calls (see GET).
+function windowContext(c) {
+  // Every drawing call also counts in c.drawn, so a GET can tell nothing changed.
+  c.drawn = 0;
+  for (const name of ['fill', 'stroke', 'fillText', 'strokeText', 'drawImage', 'putImageData']) {
+    if (!c[name]) continue;
+    const raw = c[name].bind(c);
+    c[name] = (...a) => { c.drawn++; return raw(...a); };
+  }
+  for (const name of ['fillRect', 'clearRect']) {
+    const raw = c[name].bind(c);
+    c[name] = (x, y, w, h) => {
+      c.drawn++;
+      const t = c.getTransform();
+      if (t.b || t.c) return raw(x, y, w, h);
+      const x0 = Math.round(x * t.a + t.e), x1 = Math.round((x + w) * t.a + t.e);
+      const y0 = Math.round(y * t.d + t.f), y1 = Math.round((y + h) * t.d + t.f);
+      raw((x0 - t.e) / t.a, (y0 - t.f) / t.d, (x1 - x0) / t.a, (y1 - y0) / t.d);
+    };
+  }
+  return c;
+}
+
 function getOrCreateWindow(id, title, w, h) {
   if (!windowDefs[id]) {
     const W = w || 512, H = h || 342;
@@ -824,7 +859,7 @@ function getOrCreateWindow(id, title, w, h) {
     c.width = dev(W); c.height = dev(H);
     container.appendChild(c);
     document.getElementById('canvas-wrapper').appendChild(container);
-    const cx = c.getContext('2d', { willReadFrequently: true });
+    const cx = windowContext(c.getContext('2d', { willReadFrequently: true }));
     cx.setTransform(CANVAS_SCALE, 0, 0, CANVAS_SCALE, 0, 0);
     cx.fillStyle = '#ffffff';
     cx.fillRect(0, 0, W, H);
@@ -922,6 +957,7 @@ function scheduleRescale() {
 function rescaleCanvases(S) {
   CANVAS_SCALE = S;
   for (const [id, w] of Object.entries(windowDefs)) {
+    w.ctx.drawn++;
     const old = document.createElement('canvas');
     old.width = w.canvas.width; old.height = w.canvas.height;
     old.getContext('2d').drawImage(w.canvas, 0, 0);
@@ -999,6 +1035,9 @@ function renderTabs() {
   const sig = ids.map(id => `${id}:${windowDefs[id].title}`).join('\n') + `\n${frontWindowId}`;
   if (sig === tabsSig) return;
   tabsSig = sig;
+  // The page is titled after the front window. It used to keep the title of
+  // the last window opened, such as MacPThy's long-closed "Instructions".
+  document.title = windowDefs[frontWindowId]?.title || 'ZBasic';
   bar.innerHTML = '';
   for (const id of ids) {
     const t = document.createElement('div');
@@ -1982,6 +2021,12 @@ function pushEvent(type, data = {}) {
   eventQueue.push(evt);
   if (eventQueue.length > EVENT_QUEUE_MAX) eventQueue.shift();
 }
+// An update event for window `wid`, unless one is already waiting: the Mac
+// keeps one update region per window, not a queue of them.
+function queueUpdate(wid) {
+  if (wid == null || eventQueue.some(e => e.type === 'dialog' && e.code === 5 && e.winRef === wid)) return;
+  pushEvent('dialog', {code: 5, winRef: wid});
+}
 // Take the first queued event `accept` wants, waiting up to timeoutMs for one
 // (0 = wait for ever). Resolves {type: 'null'} on timeout.
 async function waitForEvent(timeoutMs, accept = () => true) {
@@ -2356,13 +2401,18 @@ async function readPoint(arg, env) {
   const n = Math.floor(Number(await evalExpr(arg, env))) || 0;
   return {v: n >> 16, h: (n << 16) >> 16};
 }
-async function writePoint(arg, env, v, h) {
+const writePoint = (arg, env, v, h) => writeWords(arg, env, [v, h]);
+// A record of 16-bit words — a Point, a FontInfo — written where the Toolbox
+// was handed the variable that starts it: a run of DIMmed scalars (CDraw's
+// DIM FAsc,FDes,FWid,FLead), consecutive array elements (MacPThy's Ploc%(0)…),
+// or one long holding two words.
+async function writeWords(arg, env, words) {
   if (!arg) return;
-  if (arg.type === 'unary' && arg.operator === '@') return writePoint(arg.expression, env, v, h);
+  if (arg.type === 'unary' && arg.operator === '@') return writeWords(arg.expression, env, words);
   if (arg.type === 'variable') {
     const grp = dimGroups[normVarName(arg.name)];
-    if (grp && grp.length >= 2) { writeVar(env, grp[0], v); writeVar(env, grp[1], h); return; }
-    writeVar(env, arg.name, ((v & 0xFFFF) << 16) | (h & 0xFFFF));
+    if (grp && grp.length >= 2) { grp.slice(0, words.length).forEach((n, i) => writeVar(env, n, words[i])); return; }
+    writeVar(env, arg.name, words.length > 1 ? ((words[0] & 0xFFFF) << 16) | (words[1] & 0xFFFF) : words[0]);
     return;
   }
   if (arg.type === 'callable') {
@@ -2371,7 +2421,7 @@ async function writePoint(arg, env, v, h) {
     const idx = await Promise.all((arg.args ?? []).map(x => x ? evalExpr(x, env) : 0));
     let row = arr, base = subIdx(idx[0] ?? 0);
     if (idx.length > 1 && Array.isArray(arr[base])) { row = arr[base]; base = subIdx(idx[1]); }
-    row[base] = v; row[base + 1] = h;
+    words.forEach((w, i) => { if (base + i < row.length) row[base + i] = w; });
   }
 }
 // FN PTINRECT(pt, rect) — the point argument, not wherever the mouse is now.
@@ -2485,8 +2535,8 @@ function penPaint() {
   if (gfxPenMode >= 13) return null;
   return {colour: currentFg, op: 'source-over'};
 }
-// Non-null while CALL OPENRGN is in effect: the union of everything "drawn"
-// since, which CALL CLOSERGN turns into the region's rectangle.
+// Non-null while CALL OPENRGN is in effect: the lines "drawn" since (`segs`),
+// whose outline CALL CLOSERGN turns into the region, and their bounding box.
 let rgnCollect = null;
 function rgnNote(b) {
   if (!rgnCollect || !b) return;
@@ -2557,8 +2607,14 @@ function paintXor(bounds, draws) {
 // XOR path needs.
 function paintShape(bounds, draw) {
   // Between CALL OPENRGN and CALL CLOSERGN nothing is painted: the outline is
-  // being collected into a region instead.
-  if (rgnCollect) { rgnNote(bounds); return; }
+  // being collected into a region instead. The drawing steps run against a
+  // recorder that keeps the lines (see penLine) and ignores everything else.
+  if (rgnCollect) {
+    rgnNote(bounds);
+    const rec = new Proxy({segments: rgnCollect.segs}, {get: (t, k) => k in t ? t[k] : () => {}});
+    for (const d of Array.isArray(draw) ? draw : [draw]) d(rec);
+    return;
+  }
   if (!ctx) return;
   const draws = Array.isArray(draw) ? draw : [draw];
   const p = penPaint();
@@ -2574,7 +2630,13 @@ function paintShape(bounds, draw) {
 // a thick line half a pen width up and to the left of where it belongs (CDraw's
 // 6-pixel axes, `PEN 6,6`, are drawn just left of and below the plot area).
 function penLine(c, x0, y0, x1, y1) {
+  if (c.segments) { c.segments.push([x0, y0, x1, y1]); return; }   // an OPENRGN outline
   const w = penWidth, h = penHeight;
+  // Horizontal and vertical lines are rectangles, so they get the pixel snapping.
+  if (x0 === x1 || y0 === y1) {
+    c.fillRect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0) + w, Math.abs(y1 - y0) + h);
+    return;
+  }
   const pts = [[x0, y0], [x0 + w, y0], [x0 + w, y0 + h], [x0, y0 + h],
                [x1, y1], [x1 + w, y1], [x1 + w, y1 + h], [x1, y1 + h]];
   pts.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
@@ -2596,6 +2658,10 @@ function penLine(c, x0, y0, x1, y1) {
 }
 // FrameRect: the pen runs around the inside of the rectangle.
 function penFrame(c, left, top, right, bottom) {
+  if (c.segments) {   // an OPENRGN outline
+    c.segments.push([left, top, right, top], [right, top, right, bottom], [right, bottom, left, bottom], [left, bottom, left, top]);
+    return;
+  }
   const w = Math.min(penWidth, (right - left) / 2), h = Math.min(penHeight, (bottom - top) / 2);
   c.fillRect(left, top, right - left, h);
   c.fillRect(left, bottom - h, right - left, h);
@@ -2615,21 +2681,25 @@ function pointBounds(pts, pad) {
   return {x: x0 - pad, y: y0 - pad, w: (x1 - x0) + pad * 2, h: (y1 - y0) + pad * 2};
 }
 let currentFg = '#000000', currentBg = '#ffffff';
-const spriteBuffer = {};   // GET buffers: {img: ImageData, w, h (window px), S}
+// GET buffers: {canvas (device pixels), w, h (window px), S}. A GET only
+// copies canvas to canvas, which is a tenth of the cost of reading the pixels
+// out; PUT reads them (spriteImage) once per snapshot.
+const spriteBuffer = {};
+const newCanvas = (w, h) => Object.assign(document.createElement('canvas'), {width: Math.max(1, w), height: Math.max(1, h)});
+function spriteImage(sp) {
+  if (!sp.img) sp.img = sp.canvas.getContext('2d', {willReadFrequently: true}).getImageData(0, 0, sp.canvas.width, sp.canvas.height);
+  return sp.img;
+}
 // A GET buffer holds device pixels, so after the canvases change resolution it
 // is resampled — nearest neighbour, keeping it one-bit — before it is PUT.
 function spriteAtScale(key) {
   const sp = spriteBuffer[key];
   if (!sp || sp.S === CANVAS_SCALE) return sp;
-  const src = document.createElement('canvas');
-  src.width = sp.img.width; src.height = sp.img.height;
-  src.getContext('2d').putImageData(sp.img, 0, 0);
-  const dst = document.createElement('canvas');
-  dst.width = Math.max(1, dev(sp.w)); dst.height = Math.max(1, dev(sp.h));
+  const dst = newCanvas(dev(sp.w), dev(sp.h));
   const dctx = dst.getContext('2d', {willReadFrequently: true});
   dctx.imageSmoothingEnabled = false;
-  dctx.drawImage(src, 0, 0, dst.width, dst.height);
-  return (spriteBuffer[key] = {...sp, img: dctx.getImageData(0, 0, dst.width, dst.height), S: CANVAS_SCALE});
+  dctx.drawImage(sp.canvas, 0, 0, dst.width, dst.height);
+  return (spriteBuffer[key] = {...sp, canvas: dst, img: null, S: CANVAS_SCALE});
 }
 let textSize = 12, textX = 1, textY = 12, textFont = 3;  // 3 = Geneva
 let printWidth = 0;   // WIDTH statement: chars per line before auto CR/LF (0 = off)
@@ -2678,7 +2748,151 @@ function newRegion() {
   return h;
 }
 function setRegionRect(h, left, top, right, bottom) {
-  regionStore[h] = { left, top, right, bottom };
+  regionStore[h] = { left, top, right, bottom, mask: null };
+}
+
+// A region is its bounding box and, unless it is just that rectangle, a mask
+// of the window pixels inside it (one byte each, row by row over the box).
+// MacPThy shades consumer and producer surplus with the region under a demand
+// curve, cut by rectangles above and below the price; as bounding boxes those
+// regions filled the whole graph solid black.
+const rgnHas = (r, x, y) => !!r && x >= r.left && x < r.right && y >= r.top && y < r.bottom &&
+  (!r.mask || r.mask[(y - r.top) * (r.right - r.left) + (x - r.left)] === 1);
+// Regions are built and combined as whole masks; this runs on every mouse
+// move while MacPThy's quantity line is dragged.
+const EMPTY_RGN = () => ({left: 0, top: 0, right: 0, bottom: 0, mask: null});
+const rgnBox = (l, t, r, b) => ({left: Math.floor(l), top: Math.floor(t), right: Math.ceil(r), bottom: Math.ceil(b)});
+const rgnEmpty = r => !r || r.right <= r.left || r.bottom <= r.top;
+// The region's pixels as a mask over `box`.
+function rgnMaskIn(r, box) {
+  const w = box.right - box.left, m = new Uint8Array(w * (box.bottom - box.top));
+  if (rgnEmpty(r)) return m;
+  const x0 = Math.max(r.left, box.left), x1 = Math.min(r.right, box.right);
+  const y0 = Math.max(r.top, box.top), y1 = Math.min(r.bottom, box.bottom);
+  const rw = r.right - r.left;
+  for (let y = y0; y < y1 && x1 > x0; y++) {
+    const at = (y - box.top) * w + (x0 - box.left);
+    if (r.mask) m.set(r.mask.subarray((y - r.top) * rw + (x0 - r.left), (y - r.top) * rw + (x1 - r.left)), at);
+    else m.fill(1, at, at + (x1 - x0));
+  }
+  return m;
+}
+// The region a mask over `box` describes, cut down to the pixels it holds.
+function rgnFromMask(box, mask) {
+  const w = box.right - box.left, h = box.bottom - box.top;
+  let x0 = w, y0 = -1, x1 = -1, y1 = -1, n = 0;
+  for (let y = 0; y < h; y++) {
+    const row = y * w;
+    for (let x = 0; x < w; x++) {
+      if (!mask[row + x]) continue;
+      n++; if (x < x0) x0 = x; if (x > x1) x1 = x; if (y0 < 0) y0 = y; y1 = y;
+    }
+  }
+  if (!n) return EMPTY_RGN();
+  const cw = x1 - x0 + 1, ch = y1 - y0 + 1;
+  const out = {left: box.left + x0, top: box.top + y0, right: box.left + x1 + 1, bottom: box.top + y1 + 1, mask: null};
+  if (n === cw * ch) return out;
+  out.mask = new Uint8Array(cw * ch);
+  for (let y = 0; y < ch; y++) out.mask.set(mask.subarray((y0 + y) * w + x0, (y0 + y) * w + x0 + cw), y * cw);
+  return out;
+}
+// SectRgn, DiffRgn (a minus b), UnionRgn, XorRgn.
+function rgnCombine(op, a, b) {
+  const live = [a, b].filter(r => !rgnEmpty(r));
+  const src = op === 'sect' || op === 'diff' ? (rgnEmpty(a) ? [] : [a]) : live;
+  if (!src.length) return EMPTY_RGN();
+  const box = rgnBox(Math.min(...src.map(r => r.left)), Math.min(...src.map(r => r.top)),
+                     Math.max(...src.map(r => r.right)), Math.max(...src.map(r => r.bottom)));
+  const A = rgnMaskIn(a, box), B = rgnMaskIn(b, box), n = A.length;
+  if (op === 'sect') for (let i = 0; i < n; i++) A[i] &= B[i];
+  else if (op === 'diff') for (let i = 0; i < n; i++) A[i] &= B[i] ^ 1;
+  else if (op === 'union') for (let i = 0; i < n; i++) A[i] |= B[i];
+  else for (let i = 0; i < n; i++) A[i] ^= B[i];
+  return rgnFromMask(box, A);
+}
+// CloseRgn: the pixels enclosed by the lines drawn since OpenRgn (even-odd),
+// a scan line at a time through the pixel centres.
+function rgnFromSegments(segs, b) {
+  const box = rgnBox(b.left, b.top, b.right, b.bottom), w = box.right - box.left, h = box.bottom - box.top;
+  if (w <= 0 || h <= 0) return EMPTY_RGN();
+  const mask = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) {
+    const yc = box.top + y + 0.5, xs = [];
+    for (const [x0, y0, x1, y1] of segs)
+      if ((y0 <= yc && y1 > yc) || (y1 <= yc && y0 > yc)) xs.push(x0 + (yc - y0) * (x1 - x0) / (y1 - y0));
+    xs.sort((p, q) => p - q);
+    for (let k = 0; k + 1 < xs.length; k += 2) {   // pixels whose centre is in [xs[k], xs[k+1])
+      const from = Math.max(0, Math.ceil(xs[k] - 0.5) - box.left), to = Math.min(w, Math.ceil(xs[k + 1] - 0.5) - box.left);
+      if (to > from) mask.fill(1, y * w + from, y * w + to);
+    }
+  }
+  return rgnFromMask(box, mask);
+}
+// InsetRgn: dh/dv positive shrink the region, negative grow it — a pixel
+// stays only if every pixel within (dh, dv) of it is in, or joins if any is.
+function rgnInset(r, dh, dv) {
+  if (rgnEmpty(r)) return r;
+  if (!r.mask) {
+    const out = {left: r.left + dh, top: r.top + dv, right: r.right - dh, bottom: r.bottom - dv, mask: null};
+    return rgnEmpty(out) ? EMPTY_RGN() : out;
+  }
+  const ax = Math.abs(dh), ay = Math.abs(dv), grow = dh < 0 || dv < 0;
+  const box = grow ? rgnBox(r.left - ax, r.top - ay, r.right + ax, r.bottom + ay) : rgnBox(r.left, r.top, r.right, r.bottom);
+  const w = box.right - box.left, h = box.bottom - box.top;
+  // One pass along rows or columns, counting with running sums.
+  const sweep = (src, along, across, at, a) => {
+    if (!a) return src;
+    const out = new Uint8Array(src.length), sum = new Int32Array(along + 1);
+    for (let j = 0; j < across; j++) {
+      for (let i = 0; i < along; i++) sum[i + 1] = sum[i] + src[at(j, i)];
+      for (let i = 0; i < along; i++) {
+        const c = sum[Math.min(along, i + a + 1)] - sum[Math.max(0, i - a)];
+        out[at(j, i)] = grow ? (c > 0 ? 1 : 0) : (c === 2 * a + 1 ? 1 : 0);
+      }
+    }
+    return out;
+  };
+  let m = rgnMaskIn(r, box);
+  m = sweep(m, w, h, (j, i) => j * w + i, ax);
+  m = sweep(m, h, w, (j, i) => i * w + j, ay);
+  return rgnFromMask(box, m);
+}
+// Paint the region's pixels with colour(x, y) → [r, g, b] (window coordinates),
+// through a bitmap at window resolution scaled up without smoothing, so its
+// edges stay on whole window pixels.
+const cssRgb = c => { const m = /^#?([0-9a-f]{6})$/i.exec(c); const v = m ? parseInt(m[1], 16) : 0; return [v >> 16, (v >> 8) & 255, v & 255]; };
+function rgnBitmap(r, colour) {
+  const w = r.right - r.left, h = r.bottom - r.top;
+  const off = document.createElement('canvas');
+  off.width = w; off.height = h;
+  const oc = off.getContext('2d');
+  const img = oc.createImageData(w, h), d = img.data;
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    if (r.mask && !r.mask[y * w + x]) continue;
+    const [cr, cg, cb] = colour(r.left + x, r.top + y), i = (y * w + x) * 4;
+    d[i] = cr; d[i+1] = cg; d[i+2] = cb; d[i+3] = 255;
+  }
+  oc.putImageData(img, 0, 0);
+  return off;
+}
+function rgnPaint(r, colour, xor = false) {
+  if (!ctx || !r || r.right <= r.left || r.bottom <= r.top) return;
+  const off = rgnBitmap(r, colour);
+  const put = c => { c.save(); c.imageSmoothingEnabled = false; c.drawImage(off, r.left, r.top); c.restore(); };
+  if (xor) paintXor({x: r.left, y: r.top, w: r.right - r.left, h: r.bottom - r.top}, [put]);
+  else put(ctx);
+}
+// A pattern handed over as its first word — `FILLRGN(rgn, Plus(0))`: four
+// 16-bit words, two 8-pixel rows each, high byte first. Patterns line up with
+// the window's own coordinates.
+async function patternRows(arg, env) {
+  const rows = new Array(8).fill(255);
+  if (arg?.type !== 'callable') return rows;
+  const arr = readArray(env, arg.name);
+  if (!Array.isArray(arr)) return rows;
+  const base = subIdx(arg.args?.[0] ? await evalExpr(arg.args[0], env) : 0);
+  for (let k = 0; k < 4; k++) { const v = Number(arr[base + k]) & 0xFFFF; rows[2 * k] = v >> 8; rows[2 * k + 1] = v & 255; }
+  return rows;
 }
 function clipWid() { return outputWindowId ?? frontWindowId ?? 1; }
 
@@ -3787,12 +4001,26 @@ function scrollTextIfNeeded() {
 // FN STRINGWIDTH must agree, or text the program centres itself lands wrong.
 const MAC_FONT_NAMES = {0: 'Chicago', 2: 'New York', 3: 'Geneva', 4: 'Monaco', 5: 'Venice', 6: 'London',
                         7: 'Athens', 16: 'Palatino', 20: 'Times', 21: 'Helvetica', 22: 'Courier', 23: 'Symbol'};
-const MAC_FONTS = {0: "'Chicago', 'Geneva', sans-serif", 2: "'New York', Georgia, serif",
-                   3: "'Geneva', 'Helvetica', sans-serif", 4: "'Monaco', 'Courier New', monospace",
+// Geneva's stand-ins are chosen for their widths (see --geneva in the CSS).
+const GENEVA = "'Geneva', 'Verdana', 'DejaVu Sans', sans-serif";
+const MAC_FONTS = {0: `'Chicago', ${GENEVA}`, 2: "'New York', Georgia, serif",
+                   3: GENEVA, 4: "'Monaco', 'Courier New', monospace",
                    20: "'Times New Roman', Times, serif", 21: "'Helvetica', Arial, sans-serif",
                    22: "'Courier New', monospace"};
 function textFontCss() {
   return `${textSize}px ${MAC_FONTS[textFont] ?? MAC_FONTS[3]}`;
+}
+// QuickDraw's FontInfo [ascent, descent, widMax, leading] for the current TEXT
+// font and size, measured on the font the canvas actually draws with.
+function fontInfo() {
+  let asc = Math.ceil(textSize * 0.8), des = Math.ceil(textSize * 0.25);
+  if (ctx) {
+    ctx.save(); ctx.font = textFontCss();
+    const m = ctx.measureText('Hgjpqy');
+    ctx.restore();
+    if (m.fontBoundingBoxAscent) { asc = Math.ceil(m.fontBoundingBoxAscent); des = Math.ceil(m.fontBoundingBoxDescent); }
+  }
+  return [asc, des, Math.ceil(textSize * 0.9), 1];
 }
 
 // srcXor text, the way QuickDraw does it on a 1-bit screen: the glyph's ink is
@@ -4142,9 +4370,20 @@ async function execSysCall(stmt, env) {
       const w = Math.abs(x2 - x1) + 1, h = Math.abs(y2 - y1) + 1;
       if (a1.type === 'callable' || a1.type === 'variable') {
         const idx = a1.args?.[0] ? Math.floor(Number(await evalExpr(a1.args[0], env))) : 0;
-        const x0 = dev(sx), y0 = dev(sy);
-        spriteBuffer[`${a1.name}_${idx}`] = {
-          img: ctx.getImageData(x0, y0, dev(sx + w) - x0, dev(sy + h) - y0), w, h, S: CANVAS_SCALE};
+        const key = `${a1.name}_${idx}`, prev = spriteBuffer[key];
+        // Nothing drawn since this buffer last took the same rectangle: it
+        // already holds the picture. MacPThy's FN Photo snapshots the whole
+        // window on every pass of its mouse-polling loops — some seventy times
+        // per mouse step while a line is dragged — which at screen resolution
+        // took a third of a second each step.
+        if (prev && prev.ctx === ctx && prev.drawn === ctx.drawn && prev.at === `${sx},${sy},${w},${h}` && prev.S === CANVAS_SCALE) return;
+        const x0 = dev(sx), y0 = dev(sy), dw = dev(sx + w) - x0, dh = dev(sy + h) - y0;
+        const buf = prev?.canvas?.width === dw && prev.canvas.height === dh ? prev.canvas : newCanvas(dw, dh);
+        const bc = buf.getContext('2d', {willReadFrequently: true});
+        bc.globalCompositeOperation = 'copy';
+        bc.drawImage(ctx.canvas, x0, y0, dw, dh, 0, 0, dw, dh);
+        spriteBuffer[key] = {canvas: buf, img: null, w, h, S: CANVAS_SCALE,
+                             ctx, drawn: ctx.drawn, at: `${sx},${sy},${w},${h}`};
       }
       return;
     }
@@ -4172,7 +4411,7 @@ async function execSysCall(stmt, env) {
       if (a1.type === 'callable' || a1.type === 'variable') {
         const idx = a1.args?.[0] ? Math.floor(Number(await evalExpr(a1.args[0], env))) : 0;
         const sprite = spriteAtScale(`${a1.name}_${idx}`);
-        const imgData = sprite?.img;
+        const imgData = sprite && spriteImage(sprite);
         if (imgData) {
           if (isXor) {
             // 1-bit XOR, as on the Mac: ink XOR ink = no ink, so PUTting a
@@ -4255,7 +4494,6 @@ async function execSysCall(stmt, env) {
           }
           getOrCreateWindow(wid, title, w, h);
           setOutputWindow(wid);
-          if (title) document.title = title;
         }
       } else if (a0 && a0.from) {
         // WINDOW (x1,y1)-(x2,y2)
@@ -4287,7 +4525,6 @@ async function execSysCall(stmt, env) {
           }
           getOrCreateWindow(wid, title, w, h);
           setOutputWindow(wid);
-          if (title) document.title = title;
         }
       }
       showCanvas(); return;
@@ -4539,7 +4776,19 @@ async function execSysCall(stmt, env) {
                            : Math.floor(await n(0));
       if (stmt.chan) args = [null, ...args];   // keep the positional offsets
 
-      if (stmt.keyword === 'CLOSE') { destroyCtrl(id); return; }
+      // Disposing of a control erases it and adds its rectangle to the window's
+      // update region (Inside Macintosh, HideControl), so an update event —
+      // DIALOG(0) = 5 — follows. MacPThy's dialogs depend on it: they wait
+      // `WHILE D0<>1` without clearing D0, and that update is what moves D0
+      // off the 1 left by the button that closed the previous dialog. Without
+      // it "Do you want to see a selection of the curves?" was answered "No"
+      // before it was asked.
+      if (stmt.keyword === 'CLOSE') {
+        const had = !!getCtrl(id);
+        destroyCtrl(id);
+        if (had && running) queueUpdate(ctrlWid());
+        return;
+      }
 
       if (args.length >= 3) {
         // BUTTON id, condition, title$, rect, type  OR
@@ -4573,6 +4822,14 @@ async function execSysCall(stmt, env) {
               if (active === 2) ctrl.el.classList.add('selected');
               else ctrl.el.classList.remove('selected');
             }
+            // Re-issuing a button with its title redraws it, and an update
+            // event follows, like BUTTON CLOSE's. The manuals do not say so;
+            // MacPThy shows it. Its check-box dialogs toggle the clicked box
+            // with `BUTTON D1,2,title$` and go back to waiting `WHILE D0<>1`
+            // without clearing D0, so with no event in between they toggled
+            // the same box tens of thousands of times a second and kept
+            // whatever state it had when the next click came.
+            if (hasTitle && running) queueUpdate(ctrlWid());
           }
           return;
         }
@@ -5229,55 +5486,48 @@ async function execProcCall(stmt, env) {
                        Number(await ev(3))||0, Number(await ev(4))||0);
       return;
     }
-    // CALL SECTRGN(a, b, dst) / CALL DIFFRGN(a, b, dst) / CALL UNIONRGN(a, b, dst).
-    // Every region here is a rectangle, so the intersection and union are exact;
-    // a true difference is not rectangular, so it keeps the first region's
-    // bounds — which is the conservative choice for a clip.
-    case 'sectrgn': case 'diffrgn': case 'unionrgn': {
+    // CALL SECTRGN(a, b, dst) / DIFFRGN (a minus b) / UNIONRGN / XORRGN.
+    case 'sectrgn': case 'diffrgn': case 'unionrgn': case 'xorrgn': {
       const ra = regionStore[Math.floor(Number(await ev(0))) || 0];
       const rb = regionStore[Math.floor(Number(await ev(1))) || 0];
       const dh = Math.floor(Number(await ev(2))) || 0;
       if (!dh) return;
-      if (name === 'diffrgn' || !ra || !rb) {
-        regionStore[dh] = ra ? {...ra} : null;
-        return;
-      }
-      if (name === 'unionrgn') {
-        regionStore[dh] = {left: Math.min(ra.left, rb.left), top: Math.min(ra.top, rb.top),
-                           right: Math.max(ra.right, rb.right), bottom: Math.max(ra.bottom, rb.bottom)};
-        return;
-      }
-      const r = {left: Math.max(ra.left, rb.left), top: Math.max(ra.top, rb.top),
-                 right: Math.min(ra.right, rb.right), bottom: Math.min(ra.bottom, rb.bottom)};
-      regionStore[dh] = (r.right > r.left && r.bottom > r.top) ? r : {left:0, top:0, right:0, bottom:0};
+      regionStore[dh] = rgnCombine(name.slice(0, -3), ra, rb);
       return;
     }
     case 'insetrgn': {
       const h = Math.floor(Number(await ev(0))) || 0;
-      const dh = Number(await ev(1))||0, dv = Number(await ev(2))||0;
-      const r = regionStore[h];
-      if (r) { r.left += dh; r.right -= dh; r.top += dv; r.bottom -= dv; }
+      if (regionStore[h]) regionStore[h] = rgnInset(regionStore[h], Math.trunc(Number(await ev(1)) || 0), Math.trunc(Number(await ev(2)) || 0));
       return;
     }
-    // Region drawing. Every region here is a rectangle, which is all the four
-    // programs build (RECTRGN / SETRECTRGN), so these are the rect operations.
+    // Region drawing: FILLRGN with the pattern it is given, PAINTRGN with the
+    // pen (its mode included), ERASERGN in the background colour, FRAMERGN
+    // round the inside of the edge, INVERTRGN.
     case 'paintrgn': case 'framergn': case 'erasergn': case 'fillrgn':
     case 'invertrgn': case 'invertroundrgn': {
-      const h = Math.floor(Number(await ev(0))) || 0;
-      const r = regionStore[h];
-      if (!ctx || !r) return;
-      const w = r.right - r.left, hh = r.bottom - r.top;
-      if (w <= 0 || hh <= 0) return;
+      let r = regionStore[Math.floor(Number(await ev(0))) || 0];
+      if (!ctx || !r || r.right <= r.left || r.bottom <= r.top) return;
       showCanvas();
-      if (name === 'framergn') {
-        ctx.fillStyle = currentFg;
-        penFrame(ctx, r.left, r.top, r.right, r.bottom);
-      } else if (name === 'erasergn') {
-        ctx.fillStyle = currentBg; ctx.fillRect(r.left, r.top, w, hh);
-      } else if (name === 'invertrgn' || name === 'invertroundrgn') {
-        invertRectPixels(r.left, r.top, w, hh);
-      } else {
-        ctx.fillStyle = currentFg; ctx.fillRect(r.left, r.top, w, hh);
+      if (!r.mask && name !== 'fillrgn') {   // a plain rectangle: the rect routines
+        const w = r.right - r.left, hh = r.bottom - r.top;
+        if (name === 'framergn') paintShape(pointBounds([[r.left, r.top], [r.right, r.bottom]]), c => penFrame(c, r.left, r.top, r.right, r.bottom));
+        else if (name === 'erasergn') { ctx.fillStyle = currentBg; ctx.fillRect(r.left, r.top, w, hh); }
+        else if (name === 'paintrgn') paintShape(pointBounds([[r.left, r.top], [r.right, r.bottom]], 0), c => c.fillRect(r.left, r.top, w, hh));
+        else invertRectPixels(r.left, r.top, w, hh);
+        return;
+      }
+      const fg = cssRgb(currentFg), bg = cssRgb(currentBg);
+      if (name === 'fillrgn') {
+        const rows = await patternRows(stmt.args?.[1], env);
+        rgnPaint(r, (x, y) => (rows[y & 7] >> (7 - (x & 7))) & 1 ? fg : bg);
+      } else if (name === 'erasergn') rgnPaint(r, () => bg);
+      else if (name === 'invertrgn' || name === 'invertroundrgn') rgnPaint(r, () => [0, 0, 0], true);
+      else {
+        if (name === 'framergn') {
+          r = rgnCombine('diff', r, rgnInset(r, penWidth, penHeight));
+        }
+        const p = penPaint();
+        if (p) rgnPaint(r, () => p.op === 'difference' ? [0, 0, 0] : cssRgb(p.colour), p.op === 'difference');
       }
       return;
     }
@@ -5309,7 +5559,7 @@ async function execProcCall(stmt, env) {
       // the window the program is currently drawing into.
       const title = String((await ev(1)) ?? '');
       const wid = clipWid();
-      if (windowDefs[wid]) { windowDefs[wid].title = title; renderTabs(); document.title = title; }
+      if (windowDefs[wid]) { windowDefs[wid].title = title; renderTabs(); }
       return;
     }
     case 'draw1control': case 'disposdialog': return;
@@ -5332,7 +5582,7 @@ async function execProcCall(stmt, env) {
     // there — and, once the erase pen mode was honoured, rubbed out the real
     // one and part of the x axis with it.
     case 'openrgn':
-      rgnCollect = {left: penX, top: penY, right: penX, bottom: penY};
+      rgnCollect = {left: penX, top: penY, right: penX, bottom: penY, segs: []};
       return;
     case 'closergn': {
       const a0 = stmt.args?.[0];
@@ -5341,7 +5591,7 @@ async function execProcCall(stmt, env) {
         h = newRegion();
         if (a0 && (a0.type === 'variable' || a0.type === 'callable')) writeVar(env, a0.name, h);
       }
-      regionStore[h] = rgnCollect ? {...rgnCollect} : null;
+      regionStore[h] = rgnCollect ? rgnFromSegments(rgnCollect.segs, rgnCollect) : null;
       rgnCollect = null;
       return;
     }
@@ -5804,11 +6054,12 @@ async function execProcCall(stmt, env) {
       return;
     }
     case 'getfontinfo': {
-      // CALL GETFONTINFO(ascent) — fill font metric variables (DIM FAsc,FDes,FWid,FLead,Fht)
-      // Variables are laid out consecutively: FAsc, FDes, FWid, FLead, Fht
-      writeVar(env, 'fasc', textSize); writeVar(env, 'fdes', 2);
-      writeVar(env, 'fwid', Math.round(textSize * 0.6)); writeVar(env, 'flead', 1);
-      writeVar(env, 'fht', textSize + 3);
+      // CALL GETFONTINFO(info) — the FontInfo record (ascent, descent, widMax,
+      // leading) of the current TEXT font, into the variables that hold it.
+      // It used to fill CDraw's FAsc… by name whatever was passed, so MacPThy's
+      // Ploc%(0…3) stayed 0: FN Message measured each line as 1 pixel tall and
+      // printed its prompts above the top of the window.
+      await writeWords(stmt.args?.[0], env, fontInfo());
       return;
     }
     case 'getpen': {
@@ -5921,7 +6172,18 @@ async function execUserFuncCall(stmt, env) {
   const local = makeLocalScope(fn);
   await bindArgs(fn, local, stmt.args, env);
   if (fn.type === 'defFn') return evalExpr(fn.value, local);
-  await execBlock(fn.body, local);
+  // A RETURN in a function's own body leaves the function: compiled ZBasic
+  // calls an FN as a subroutine, so RETURN is the return to its caller.
+  // MacPThy's FN Message starts `IF Xmes=-1 THEN GOSUB "cancel":RETURN`;
+  // carried on out to the caller's GOSUB instead, it ended DSM's main routine
+  // each time it cleared a message, and DSM went round and round its loop
+  // without ever drawing anything.
+  try {
+    if (await execBlock(fn.body, local) instanceof ReturnSignal) return null;
+  } catch (e) {
+    if (e instanceof ReturnSignal) return null;
+    throw e;
+  }
   return fn.ret ? evalExpr(fn.ret, local) : null;
 }
 
@@ -6379,7 +6641,19 @@ async function evalCallable(node, env, fnCall = false) {
       return (d[0] + d[1] + d[2]) < 384 ? 1 : 0;
     }
 
-    case 'ptinrgn': return 0;  // region hit-test stub
+    // FN PTINRGN(pt, rgn) / FN RECTINRGN(rect, rgn): does the point, or any
+    // pixel of the rectangle, lie in the region?
+    case 'ptinrgn': {
+      const p = await readPoint(rawArgs[0], env), r = regionStore[Math.floor(await N(1))];
+      return p && rgnHas(r, p.h, p.v) ? -1 : 0;
+    }
+    case 'rectinrgn': {
+      const q = await resolveRect(rawArgs[0], env), r = regionStore[Math.floor(await N(1))];
+      if (!q || !r) return 0;
+      for (let y = Math.max(q.top, r.top); y < Math.min(q.bottom, r.bottom); y++)
+        for (let x = Math.max(q.left, r.left); x < Math.min(q.right, r.right); x++) if (rgnHas(r, x, y)) return -1;
+      return 0;
+    }
 
     case 'bittst': {
       // FN BITTST(ptr, bit) — test a bit in memory (stub: keyboard state, always false)
