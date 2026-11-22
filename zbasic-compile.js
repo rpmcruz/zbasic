@@ -15,12 +15,28 @@ console.log("Written zbasic-compiled.js");
 // does not need this and keeps working for anything not in the list.
 const ROOT = "progs/extracted";
 
-// Same rule the interpreter's autoSelectFile() uses: prefer a .MAIN, otherwise
-// take the sole .txt. A directory with neither is not a program we can start.
+// Which file a program starts from — the same rule as autoSelectFile() in
+// index.html. A PG:PRO project starts from its .MAIN. Otherwise the candidates
+// are the text listings: the archives' own .txt exports and the listings
+// recovered from ZBasic's tokenized sources (.detok.txt, see
+// zbasic-detokenize.js). The windows, menus and pictures come from the
+// application's resource fork, so prefer a listing of the version the
+// application was built from ("grglflx27.exe" runs grglflx27, not the later
+// grglflx28 work in progress), and among those the recovered one — the .txt
+// exports are later and not always faithful (CDraw's is not even ZBasic).
+function versionOf(name) {
+  const m = name.replace(/\.(detok\.txt|txt|bas|exe|rsrc)$/gi, "").match(/(\d+(?:\.\d+)*)\D*$/);
+  return m ? m[1] : null;
+}
 function pickMain(files) {
   const main = files.find(f => f.toUpperCase().endsWith(".MAIN"));
   if (main) return main;
-  const txt = files.filter(f => f.toLowerCase().endsWith(".txt"));
+  const app = files.find(f => f.toLowerCase().endsWith(".rsrc"));
+  const want = app && versionOf(app);
+  let txt = files.filter(f => f.toLowerCase().endsWith(".txt"));
+  if (want && txt.some(f => versionOf(f) === want)) txt = txt.filter(f => versionOf(f) === want);
+  const detok = txt.filter(f => f.toLowerCase().endsWith(".detok.txt"));
+  if (detok.length === 1) return detok[0];
   return txt.length === 1 ? txt[0] : null;
 }
 

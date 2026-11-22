@@ -2,12 +2,13 @@
   {
     "name": "CDraw",
     "dir": "progs/extracted/CDraw",
-    "main": "CDraw45.txt",
+    "main": "CurveDraw45.bas.detok.txt",
     "files": [
       "CDraw45.exe.rsrc",
       "CDraw45.txt",
       "CurveDraw Help",
-      "CurveDraw45.bas"
+      "CurveDraw45.bas",
+      "CurveDraw45.bas.detok.txt"
     ]
   },
   {
@@ -18,15 +19,17 @@
       "grglflx notes",
       "grglflx27.exe.rsrc",
       "grglflx27.txt",
-      "grglflx28.bas"
+      "grglflx28.bas",
+      "grglflx28.bas.detok.txt"
     ]
   },
   {
     "name": "MacPThy",
     "dir": "progs/extracted/MacPThy",
-    "main": "PThy 1.1.txt",
+    "main": "PThy 1.1.detok.txt",
     "files": [
       "PThy 1.1",
+      "PThy 1.1.detok.txt",
       "PThy 1.1.txt",
       "Price Theory 1.1.rsrc"
     ]
