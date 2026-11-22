@@ -855,17 +855,21 @@ function getOrCreateWindow(id, title, w, h) {
 // to fill the wrapper blew Grglflx's 84x260 "Setup 2" dialog up to the size
 // of its 498x270 main window, pushing the Done button off the bottom of the
 // page. Windows on a Mac share a screen, so they share a scale: derive it
-// from a virtual screen at least as large as the biggest window.
+// from a virtual screen just large enough for the open windows. (It used to be
+// at least a Mac Plus screen, 512x342, which left Supermarket's 494x284 window
+// a sixth short of the height it could have filled.)
 // Returns CSS pixels per window pixel, or 0 while the page has no size yet.
 function screenScale() {
   const wrap = document.getElementById('canvas-wrapper');
-  const availW = wrap?.clientWidth, availH = wrap?.clientHeight;
-  if (!availW || !availH) return 0;
-  let scrW = 512, scrH = 342;
+  // A few pixels of margin, so a window filling the page still shows its edge.
+  const availW = wrap?.clientWidth - 8, availH = wrap?.clientHeight - 8;
+  if (!(availW > 0) || !(availH > 0)) return 0;
+  let scrW = 0, scrH = 0;
   for (const w of Object.values(windowDefs)) {
     scrW = Math.max(scrW, w.logW || 0);
     scrH = Math.max(scrH, w.logH || 0);
   }
+  if (!scrW || !scrH) [scrW, scrH] = [512, 342];
   return Math.min(availW / scrW, availH / scrH);
 }
 // The canvas resolution that puts one canvas pixel on each device pixel.
