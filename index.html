@@ -2808,7 +2808,7 @@ let textSize = 12, textX = 1, textY = 12, textFont = 3;  // 3 = Geneva
 let printWidth = 0;   // WIDTH statement: chars per line before auto CR/LF (0 = off)
 let printTab = 16;    // DEF TAB: column width used by "," between PRINT items
 let textTransferMode = 0;  // 0=srcCopy, 2=srcXor (from TEXT font,size,style,mode)
-let yieldCounter = 0;
+let yieldCounter = 0, lastYield = 0;
 
 let onMenuHandler = null;
 let onDialogHandler = null;
@@ -2960,6 +2960,18 @@ function rgnInset(r, dh, dv) {
   m = sweep(m, h, w, (j, i) => i * w + j, ay);
   return rgnFromMask(box, m);
 }
+// FRAMERGN's outline of a region for a pen size: the region less its inset.
+// No operation changes a region in place — each makes a new one — so the
+// outline can be kept. MacPThy frames the same two curve regions on every pass
+// of Monopoly's drag, and the inset was most of the time each pass took.
+const rgnFrames = new WeakMap();
+function rgnFrame(r, pw, ph) {
+  let byPen = rgnFrames.get(r);
+  if (!byPen) rgnFrames.set(r, byPen = new Map());
+  const k = `${pw},${ph}`;
+  if (!byPen.has(k)) byPen.set(k, rgnCombine('diff', r, rgnInset(r, pw, ph)));
+  return byPen.get(k);
+}
 // Paint the region's pixels with colour(x, y) → [r, g, b] (window coordinates),
 // through a bitmap at window resolution scaled up without smoothing, so its
 // edges stay on whole window pixels.
@@ -3034,8 +3046,14 @@ function applyClip(h) { setClipRect(regionStore[h] || null); }
 // Run was ignored because the first one still counted as running.
 async function maybeYield() {
   if (stopRequested) throw new Error('USER_STOP');
-  // Only a yield to the browser: events are delivered at line ends (lineEnd).
-  if (++yieldCounter % 500 === 0) await macrotask();
+  // Only a yield to the browser (events are delivered at line ends, lineEnd),
+  // every 10 ms or so of running. Counted in statements alone — every 500 —
+  // a loop that draws a lot held the page for a tenth of a second at a time:
+  // dragging Monopoly's quantity line, the mouse got through 8 times a second.
+  if (++yieldCounter % 20 === 0 && Date.now() - lastYield >= 10) {
+    await macrotask();
+    lastYield = Date.now();
+  }
 }
 
 // The Mac's TickCount counts 1/60 s ticks since *boot*, so it comfortably fits
@@ -5685,9 +5703,7 @@ async function execProcCall(stmt, env) {
       } else if (name === 'erasergn') rgnPaint(r, () => bg);
       else if (name === 'invertrgn' || name === 'invertroundrgn') rgnPaint(r, () => [0, 0, 0], true);
       else {
-        if (name === 'framergn') {
-          r = rgnCombine('diff', r, rgnInset(r, penWidth, penHeight));
-        }
+        if (name === 'framergn') r = rgnFrame(r, penWidth, penHeight);
         const p = penPaint();
         if (p) rgnPaint(r, penPixel(p), p.op === 'difference');
       }
