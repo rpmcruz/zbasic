@@ -185,8 +185,9 @@ body {
 #canvas-wrapper {
   flex: 1;
   display: flex;
-  align-items: center;
+  align-items: flex-start;   /* the window sits under the menu bar, as on the Mac */
   justify-content: center;
+  padding-top: 4px;
   overflow: hidden;
   background: #555;
 }
@@ -327,7 +328,6 @@ body {
   #toolbar { gap: 5px; padding: 4px 6px; }
   .tb-btn { padding: 4px 10px; }
   #prog-select, #file-select { max-width: 40vw; }
-  #canvas-wrapper { align-items: flex-start; }
 }
 .mac-editfield {
   /* --ef-size is the field's own point size (the TEXT size in force when it
