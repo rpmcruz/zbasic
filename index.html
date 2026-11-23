@@ -3417,7 +3417,7 @@ async function runProgram() {
   btnRun.textContent = 'Stop'; btnRun.classList.add('running');
 
   globalVars = {}; dataStore = []; dataPtr = 0; funcDefs = {};
-  pendingGets.clear(); setMacCursor('default');
+  pendingGets.clear(); setMacCursor('default'); savedMenuBars.clear();
   Object.keys(fnPtrTable).forEach(k => delete fnPtrTable[k]); nextFnPtrHandle = 1;
   executedGlobals.clear();
   destroyAllCtrls();
@@ -5628,16 +5628,18 @@ async function execProcCall(stmt, env) {
       menuBarSig = null;
       renderMenuBar(); return;
     case 'drawmenubar': return;  // we render immediately; no-op here
-    case 'setmenubar':
-      if (savedMenuBar) {
+    case 'setmenubar': {
+      const bar = savedMenuBars.get(Math.floor(Number(await ev(0))) || 0);
+      if (bar) {
         // The saved bar carries each menu's install order with it.
         Object.keys(menuDefs).forEach(k => delete menuDefs[k]);
         menuBarSig = null;
-        Object.assign(menuDefs, JSON.parse(JSON.stringify(savedMenuBar)));
+        Object.assign(menuDefs, bar);
         menuSeq = Math.max(0, ...Object.values(menuDefs).map(m => (m.order ?? 0) + 1));
         renderMenuBar();
       }
       return;
+    }
     case 'appendmenu': {
       const handle = menuIdOf(Math.floor(Number(await ev(0))) || 0);
       const itemStr = String((await ev(1)) ?? '');
@@ -6405,7 +6407,15 @@ async function execProcCall(stmt, env) {
   await execBlock(fn.body, local);
 }
 
-let savedMenuBar = null;
+// FN GETMENUBAR — a handle to a copy of the menu list; SETMENUBAR(handle) puts
+// that list back. MacPThy keeps four — the main one and one for each of Curve
+// Draw, BI Draw and DSM — and "Change Programs" goes back to the main one;
+// remembering only the latest bar brought back the module's menus instead,
+// with no way to pick another program. The list holds the menus themselves,
+// as the Mac's holds MenuHandles: a menu disabled while its bar was down is
+// still disabled when the bar comes back, which is why MacPThy re-enables its
+// menus after each SETMENUBAR.
+const savedMenuBars = new Map();
 
 // Bind a function's parameters in its new scope. They go under the normalised
 // name that readVar() tries first: stored as the raw `x%`, a read of x% inside a
@@ -7050,9 +7060,11 @@ async function evalCallable(node, env, fnCall = false) {
       renderMenuBar();
       return menuHandle(menuId);
     }
-    case 'getmenubar':
-      savedMenuBar = JSON.parse(JSON.stringify(menuDefs));
-      return 1;
+    case 'getmenubar': {
+      const h = savedMenuBars.size + 1;
+      savedMenuBars.set(h, {...menuDefs});
+      return h;
+    }
     case 'getmhandle': {
       const mid = Math.floor(Number(await A(0))) || 0;
       return menuDefs[mid] ? menuHandle(mid) : 0;
