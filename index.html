@@ -343,6 +343,13 @@ body {
 }
 .mac-editfield.framed { background: white; border: 1px solid #000; }
 .mac-editfield:read-only { cursor: default; }
+/* An unframed field shows nothing of where it is, and a click beside it types
+   nowhere. Supermarket's item limits are a strip at the top of a box whose
+   lower half says "Items": a click in the middle of the box missed the field,
+   and the limit typed after it went nowhere. A faint edge on hover and while
+   typing shows where the field is. */
+.mac-editfield:not(.framed):not(:read-only):hover,
+.mac-editfield:not(.framed):not(:read-only):focus { outline: 1px dotted #888; outline-offset: -1px; }
 </style>
 </head>
 <body>
