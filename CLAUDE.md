@@ -60,8 +60,8 @@ One file, top to bottom:
    converts with `dev()`.
 4. **Loading** — `addFile` (sources are decoded from Mac Roman),
    `loadProgram`, `autoSelectFile`, `parseTolerant`.
-5. **Events** — `pushEvent` queues; `fireEventHandlers` delivers to the
-   `ON … GOSUB` handlers (see "Event traps" below); `waitForEvent` serves
+5. **Events** — `pushEvent` queues; `lineEnd`/`fireEventHandlers` deliver to
+   the `ON … GOSUB` handlers (see "Event traps" below); `waitForEvent` serves
    `DIALOG(0)` and friends.
 6. **Interpreter** — `runProgram`, `execBlock`/`runFrom` (statement lists,
    GOTO/GOSUB/RETURN as exceptions), `execStmt`, `execSysCall` (statements),
@@ -78,9 +78,16 @@ One file, top to bottom:
 Each of these was a bug; the code comments carry the details and evidence.
 
 - **Integer arithmetic.** An expression *level* is integer unless it contains
-  a decimal point, `!`/`#`, a scientific function, `\` or a constant > 65535,
-  and then `/` is integer division (`levelIsReal`). `%`/`&` variables
-  truncate and wrap on assignment (`coerceVar`).
+  a decimal point, `!`/`#` (a variable, array element or FN), a scientific
+  function, `\` or a constant > 65535, and then `/` is integer division
+  (`levelIsReal`). Plain, `%` and `&` variables truncate and wrap on
+  assignment (`coerceVar`). `<<`/`>>` multiply and divide by 2^n, keeping
+  the fraction on a real level (MacPThy's fixed point, `Y!<<10`).
+- **The suffix is part of the name.** `X`, `X!`, `X#`, `X&` and `X$` are
+  different variables; only `X%` is `X`, integer being the default type
+  (`normVarName`). MacPThy sets `Rate!=.2:Rate=20`. Record fields are the
+  exception: Supermarket declares `STargetLine%` and writes `STargetLine`
+  (`normFieldName`).
 - **FOR/NEXT** runs at least once and keeps its counter in the variable:
   programs exit loops by assigning to it, and it ends at limit+STEP.
 - **All variables are global**, LONG FN parameters included; only LOCAL FN
@@ -90,17 +97,34 @@ Each of these was a bug; the code comments carry the details and evidence.
   `readPoint`/`writePoint`).
 - **Labels** are matched loosely (`canonLabel`): the spelling at a GOSUB need
   not match the definition.
-- **Event traps.** Events queue until the program turns the trap on with
-  `X ON`, which also delivers whatever is pending; after that `X OFF` does not
-  stop delivery. See the comment above `trappedBy` for why. The Stop button
-  always stops; `ON STOP` is the clean-up routine run on the way out.
+- **Event traps act on the text, at line ends.** ZBasic compiles an event
+  check at the end of every line written between `X ON` and `X OFF` — by
+  position in the source, not by what ran last — and none between the
+  statements of one line. MacPThy writes unreachable `MOUSE OFF:DIALOG OFF`
+  after RETURNs just to switch checks off for the routine below. The grammar
+  marks line ends (`eol`, `headEol`), `markTrapRegions` gives statements their
+  regions, `lineEnd` delivers. Nothing is delivered before the first runtime
+  `X ON`. The Stop button always stops; `ON STOP` is the clean-up routine run
+  on the way out.
+- **MOUSE(0)**: -1 while a single press is held (drags); a double or triple
+  click is reported once as a finished +2/+3, even while held — the Mac was
+  rarely back in time to see it held, and MacPThy's Monopoly waits for M=2.
+  A click on a control is the control's (a DIALOG event), never a mouse click.
+- **`RESTORE n`** counts DATA items from 0 (the reference's example).
 - **EDIT FIELD**: types 1-4 editable and 5+ static, odd types framed;
   justification 1/2/3 = left/centre/right in the low bits of the last
   argument; the field uses the TEXT font in force when it was built.
 - **QuickDraw pen**: a line drags the pen rectangle, hanging right and down
   from the path; frames are drawn inside their rectangle (`penLine`,
-  `penFrame`). Pen modes: 10 is XOR, 11/12 erase (`penPaint`); XOR is done on
-  a 1-bit mask so drawing twice restores exactly (`paintXor`, `gfxTextXor`).
+  `penFrame`). `PEN` keeps every value it leaves out, the mode included. Its
+  5th argument picks a pattern from PAT# 0 (`penPattern`), and modes 8–15 do
+  what QuickDraw does with each pattern bit (`PEN_MODES`); XOR is done on a
+  1-bit mask so drawing twice restores exactly (`paintXor`, `gfxTextXor`).
+  FRAME/PAINT of rects, ovals and round rects use the pen.
+- **SELECT**: `CASE =x` is a case, not an assignment to a variable CASE.
+- **SWAP** takes any two variables — MacPThy swaps arrays element by element.
+- **GETKEYS/BITTST**: the KeyMap bit of key k is bit k AND 7 of byte k\8
+  (Shift is 56); BITTST reads memory high bit first.
 - **Text**: `PRINT`/`STR$` put a blank before non-negative numbers.
   `CHR$`/`ASC` use Mac Roman codes.
 - **RETURN inside an FN leaves the function** (compiled ZBasic calls an FN
@@ -114,8 +138,9 @@ Each of these was a bug; the code comments carry the details and evidence.
 - **Regions have shapes**: a bounding box plus a pixel mask (`rgnCombine`,
   `rgnInset`, `rgnFromSegments` for OPENRGN/CLOSERGN outlines). FILLRGN takes
   the program's 8x8 pattern; PAINTRGN uses the pen.
-- **Pixels.** Window canvases run at a fractional scale; rectangles are
-  snapped to device pixels (`windowContext`) so painting and erasing cancel.
+- **Pixels.** Window canvases run at a fractional scale; rectangles and
+  images are snapped to device pixels (`windowContext`) so painting and
+  erasing cancel.
   Text uses Geneva stand-ins of Geneva's width (`GENEVA`, `--geneva`) because
   programs size boxes for it. GET copies canvas to canvas and skips windows
   that have not changed — MacPThy snapshots the window on every loop pass.
