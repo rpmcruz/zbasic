@@ -367,7 +367,7 @@ body {
 
 <input type="file" id="file-input" style="display:none" webkitdirectory multiple>
 
-<script src="zbasic-compiled.js?v=45b7a43d37"></script>
+<script src="zbasic-compiled.js?v=2282f5ae93"></script>
 <script>
 const parser = ZBasicParser;
 // Device pixels per window pixel in every canvas. It follows the size the
@@ -3034,10 +3034,8 @@ function applyClip(h) { setClipRect(regionStore[h] || null); }
 // Run was ignored because the first one still counted as running.
 async function maybeYield() {
   if (stopRequested) throw new Error('USER_STOP');
-  if (++yieldCounter % 500 === 0) {
-    await macrotask();
-    await fireEventHandlers();
-  }
+  // Only a yield to the browser: events are delivered at line ends (lineEnd).
+  if (++yieldCounter % 500 === 0) await macrotask();
 }
 
 // The Mac's TickCount counts 1/60 s ticks since *boot*, so it comfortably fits
@@ -3064,27 +3062,66 @@ function macrotask() {
   return new Promise(r => { yieldWaiters.push(r); yieldChannel.port2.postMessage(0); });
 }
 
-// When does a queued event reach its ON … GOSUB handler? The manuals here do
-// not cover the Mac traps, so this is fitted to what the four programs need:
-//  • Not before the program has turned that trap on. PG:PRO installs its
-//    handlers, then builds the main window and runs Supermarket's FN Initialize,
-//    and only then enters its `MENU ON : DIALOG ON …` loop. Delivering earlier
-//    ran the window-update handler half way through Initialize, before the
-//    wells existed, so they were drawn without their limits.
-//  • Every `X ON` delivers what is pending right away — CDraw and PG:PRO
-//    open their traps for exactly one statement per pass of their main loop.
-//  • After that, `X OFF` does not stop delivery: MacPThy's Instructions window
-//    runs `DIALOG ON` once, then `WHILE Reading … DIALOG OFF … WEND`, and only
-//    its ON DIALOG handler can end that loop (close box → Reading=0).
+// When does a queued event reach its ON … GOSUB handler? ZBasic compiles an
+// event check at the end of each line written between `X ON` and `X OFF`: the
+// switches act on the program's text, not on the order it runs in, and the
+// statements of one line run without a check between them.
+//  • The text. MacPThy writes `MOUSE OFF:DIALOG OFF:MENU OFF` where they can
+//    never run (after a RETURN or an END FN, before the next routine's label),
+//    only to keep the routine below free of checks; CDraw, Grglflx and PG:PRO
+//    open their traps on one line and close them on the next ("The only place
+//    events are trapped"). MacPThy's Instructions window runs `DIALOG OFF` on
+//    every pass of its reading loop, yet the loop's head is written after a
+//    `DIALOG ON`, and that is where its close box is heard. Its Curve Draw
+//    draws after `MENU OFF:DIALOG OFF:MOUSE OFF`, so the update event a closed
+//    button left waits; delivered in the middle, its FN Refresh put back the
+//    picture from before and wiped the curves half drawn.
+//  • Line ends. Curve Draw clears the screen with `CLS:…:BUTTON CLOSE 1:
+//    BUTTON CLOSE 2:FN Photo`. Checked after the BUTTON CLOSE, the update put
+//    the old picture back before FN Photo could take the cleared one; checked
+//    at the end of the line, FN Refresh puts back the cleared screen.
+//  • Not before the program has run that `X ON` at least once. PG:PRO installs
+//    its handlers, then builds the main window and runs Supermarket's
+//    FN Initialize, and only then enters its `MENU ON : DIALOG ON …` loop.
+//    Delivering earlier ran the window-update handler half way through
+//    Initialize, before the wells existed, so they were drawn without limits.
+// The grammar marks the statements that end a line (`eol`) and the loops whose
+// first line ends at their header (`headEol`); markTrapRegions gives every
+// statement the ON regions it starts in (__traps) and ends in (__trapsEnd).
+const TRAP_BITS = {DIALOG: 1, MENU: 2, MOUSE: 4, TIMER: 8, EVENT: 16};
+let trapsHere = 0;   // the ON regions of the line end being checked
+function markTrapRegions(program) {
+  let mask = 0;
+  const seen = new WeakSet();
+  const walk = node => {
+    if (!node || typeof node !== 'object' || seen.has(node)) return;
+    seen.add(node);
+    if (Array.isArray(node)) { node.forEach(walk); return; }
+    const bit = node.type === 'sysFuncCall' && TRAP_BITS[node.cmd];
+    if (bit && node.keyword === 'ON') mask |= bit;
+    else if (bit && (node.keyword === 'OFF' || node.keyword === 'STOP')) mask &= ~bit;
+    if (node.type) node.__traps = mask;
+    for (const k in node) if (k !== '__traps' && k !== '__trapsEnd') walk(node[k]);
+    if (node.type) node.__trapsEnd = mask;
+  };
+  walk(program);
+}
 function trappedBy(evt) {
+  const here = bit => (trapsHere & TRAP_BITS[bit]) !== 0;
   switch (evt.type) {
-    case 'menu':  return menuOn  ? onMenuHandler  : null;
-    case 'mouse': return mouseOn ? onMouseHandler : null;
-    case 'timer': return timerOn ? onTimerHandler : null;
-    case 'edit':  return (dialogOn || eventOn) ? onEditHandler : null;
+    case 'menu':  return menuOn && here('MENU') ? onMenuHandler : null;
+    case 'mouse': return mouseOn && here('MOUSE') ? onMouseHandler : null;
+    case 'timer': return timerOn && here('TIMER') ? onTimerHandler : null;
+    case 'edit':  return (dialogOn && here('DIALOG')) || (eventOn && here('EVENT')) ? onEditHandler : null;
     case 'stop':  return null;
-    default:      return dialogOn ? onDialogHandler : null;   // buttons, fields, windows
+    default:      return dialogOn && here('DIALOG') ? onDialogHandler : null;   // buttons, fields, windows
   }
+}
+// The check compiled at the end of a line: hand over what is waiting.
+async function lineEnd(traps) {
+  if (!traps || !eventQueue.length || firingEvents) return;
+  trapsHere = traps;
+  await fireEventHandlers();
 }
 
 let firingEvents = false;
@@ -3181,13 +3218,14 @@ async function runFrom(stmts, i, env) {
     if (!s) continue;
     try {
       if (await execStmt(s, env) instanceof ReturnSignal) return true;
+      if (s.eol) await lineEnd(s.__trapsEnd);
     } catch (e) {
       if (e instanceof ReturnSignal) return true;
       if (!(e instanceof GotoSignal || e instanceof GosubSignal)) throw e;
       const li = findLabel(stmts, e.label, i + 1);
       if (li < 0) throw e;
       if (e instanceof GotoSignal) i = li;
-      else await runFrom(stmts, li + 1, env);
+      else { await runFrom(stmts, li + 1, env); if (s.eol) await lineEnd(s.__trapsEnd); }
     }
   }
   return true;
@@ -3393,6 +3431,7 @@ async function runProgram() {
     try { globalVars[normVarName(eq.name)] = await evalExpr(eq.value, globalVars); }
     catch(e) { console.warn(`equate ${eq.name}: ${e.message ?? e}`); }
   }
+  markTrapRegions(currentProgram);
   await layoutVariables(currentProgram);
   CANVAS_SCALE = targetCanvasScale();   // no windows yet: pick it before the first
   getOrCreateWindow(1, null, 512, 342);
@@ -3493,12 +3532,13 @@ async function execBlock(stmts, env) {
     try {
       const r = await execStmt(stmt, env);
       if (r instanceof ReturnSignal) return r;
+      if (stmt.eol) await lineEnd(stmt.__trapsEnd);
     } catch (e) {
       if (!(e instanceof GotoSignal || e instanceof GosubSignal)) throw e;
       const li = findLabel(stmts, e.label, i + 1);
       if (li < 0) throw e;
       if (e instanceof GotoSignal) i = li;
-      else await runFrom(stmts, li + 1, env);
+      else { await runFrom(stmts, li + 1, env); if (stmt.eol) await lineEnd(stmt.__trapsEnd); }
     }
   }
 }
@@ -4713,14 +4753,13 @@ async function execSysCall(stmt, env) {
         // so a click on another tool set D0=1, and the very next statement put
         // it back to 0: the loop never ended and no other tool could be chosen.
         dialogOn = true;
-        // Yield to the browser and dispatch anything already queued, like
-        // EVENT ON. This sits inside event loops, so it uses the unclamped
-        // macrotask rather than setTimeout.
+        // Yield to the browser, so clicks get in; what is queued is delivered
+        // at the end of the line (lineEnd). This sits inside event loops, so it
+        // uses the unclamped macrotask rather than setTimeout.
         await macrotask();
-        await fireEventHandlers();
         return;
       }
-      if (stmt.keyword === 'OFF') return;   // see trappedBy()
+      if (stmt.keyword === 'OFF') return;   // acts on the text: markTrapRegions
       const nn = await n(0);
       if (nn === 0) {
         const evt = await waitForEvent(0);
@@ -4815,40 +4854,38 @@ async function execSysCall(stmt, env) {
       return;
 
     case 'MOUSE':
-      if (stmt.keyword === 'ON')  { mouseOn = true; await fireEventHandlers(); return; }
-      if (stmt.keyword === 'OFF') return;   // see trappedBy()
+      if (stmt.keyword === 'ON')  { mouseOn = true; return; }
+      if (stmt.keyword === 'OFF') return;   // acts on the text: markTrapRegions
       console.log(`unsupported: MOUSE ${stmt.keyword ?? ''}`); return;
 
     case 'TIMER': {
       if (stmt.keyword === 'ON') {
         timerOn = true;
-        await fireEventHandlers();
         return;
       }
-      if (stmt.keyword === 'OFF') return;   // see trappedBy()
+      if (stmt.keyword === 'OFF') return;   // acts on the text: markTrapRegions
       // TIMER n — set interval in ticks (1 tick ≈ 1/60 s)
       timerInterval = Math.round((await n(0)) * 1000 / 60);
       return;
     }
 
     case 'EVENT':
-      // EVENT ON/OFF — global event enable. EVENT ON yields to the browser and
-      // dispatches any pending events to their registered handlers.
+      // EVENT ON/OFF — global event enable. EVENT ON yields to the browser;
+      // pending events reach their handlers at the end of the line.
       if (stmt.keyword === 'ON') {
         eventOn = true;
         await macrotask();
-        await fireEventHandlers();
         // ON EVENT sees every event before ZBasic does, null events included;
         // PG:PRO runs its idle work (Supermarket's whole simulation step) there.
         if (onEventHandler) await callEventHandler(onEventHandler);
         return;
       }
-      if (stmt.keyword === 'OFF') return;   // see trappedBy()
+      if (stmt.keyword === 'OFF') return;   // acts on the text: markTrapRegions
       console.log(`unsupported: EVENT ${stmt.keyword ?? ''}`); return;
 
     case 'MENU':
-      if (stmt.keyword === 'ON')  { menuOn = true; renderMenuBar(); await fireEventHandlers(); return; }
-      if (stmt.keyword === 'OFF') return;   // see trappedBy()
+      if (stmt.keyword === 'ON')  { menuOn = true; renderMenuBar(); return; }
+      if (stmt.keyword === 'OFF') return;   // acts on the text: markTrapRegions
       // fall through to MENU menuId, itemId, state [, title] handling below
       {
         const a0 = args[0];
@@ -5335,6 +5372,7 @@ async function execFor(stmt, env) {
   const slack = Number.isInteger(step) ? 0 : Math.abs(step) * 1e-9;
   for (;;) {
     await maybeYield();
+    if (stmt.headEol) await lineEnd(stmt.__traps);
     const r = await execBlock(stmt.body, env);
     if (r instanceof ReturnSignal) return r;
     writeVar(env, varName, (Number(readVar(env, varName)) || 0) + step);
@@ -5346,6 +5384,7 @@ async function execFor(stmt, env) {
 async function execWhile(stmt, env) {
   while (isTruthy(await evalExpr(stmt.condition, env))) {
     await maybeYield();
+    if (stmt.headEol) await lineEnd(stmt.__traps);
     const r = await execBlock(stmt.body, env);
     if (r instanceof ReturnSignal) return r;
   }
@@ -5354,6 +5393,7 @@ async function execWhile(stmt, env) {
 async function execDoWhile(stmt, env) {
   do {
     await maybeYield();
+    if (stmt.headEol) await lineEnd(stmt.__traps);
     const r = await execBlock(stmt.body, env);
     if (r instanceof ReturnSignal) return r;
   } while (!isTruthy(await evalExpr(stmt.condition, env)));

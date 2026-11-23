@@ -16,8 +16,10 @@ blockStmt
   // A label written as "Name" may be followed by a statement on the same line
   // with only a space between them, so it needs no separator.
   = _ &'"' stmt:statementWithProgress __ { return stmt; }
-  / _ stmt:statementWithProgress _ separator { return stmt; }
-separator = ":" / newline / comment newline
+  / _ stmt:statementWithProgress _ eol:separator { if (stmt && eol) stmt.eol = true; return stmt; }
+// True when the separator ends the line. ZBasic checks for events at the end
+// of a line, not between the statements of one (see markTrapRegions).
+separator = ":" { return false; } / newline { return true; } / comment newline { return true; }
 
 statementWithProgress = s:statement
   { progressCallback(location().start.line, s); return s; }
@@ -241,12 +243,12 @@ longIfConf = "LONG IF"i __ condition:expression _ separator body:block maybeElse
 // every program ran with a step of 1. Grglflx redraws its curve with
 // `FOR Xtmp=Xmin TO X-DeltaX STEP DeltaX`, which then walked over the array
 // slots between plotted points and drew the curve as a picket fence.
-forLoop = "FOR"i __ variable:identifier _ "=" _ start:expression __ "TO"i __ end:expression step:(__ "STEP"i __ e:expression { return e; })? _ separator body:block _ "NEXT"i (__ identifier)?
-  { return {type: "for", variable, start, end, step, body}; }
-whileLoop = "WHILE"i __ condition:expression _ separator body:block _ "WEND"i
-  { return {type: "while", condition, body}; }
-doLoop = "DO"i _ separator body:block _ "UNTIL"i __ condition:expression
-  { return {type: "do_while", condition, body}; }
+forLoop = "FOR"i __ variable:identifier _ "=" _ start:expression __ "TO"i __ end:expression step:(__ "STEP"i __ e:expression { return e; })? _ headEol:separator body:block _ "NEXT"i (__ identifier)?
+  { return {type: "for", variable, start, end, step, body, headEol}; }
+whileLoop = "WHILE"i __ condition:expression _ headEol:separator body:block _ "WEND"i
+  { return {type: "while", condition, body, headEol}; }
+doLoop = "DO"i _ headEol:separator body:block _ "UNTIL"i __ condition:expression
+  { return {type: "do_while", condition, body, headEol}; }
 // ON <event> GOSUB handler installs a trap; ON <expr> GOSUB a,b,c is the
 // computed branch. Only ON TIMER carries an argument. ON ERROR GOSUB 65535
 // turns disk-error trapping over to the program and ON ERROR RETURN gives it
