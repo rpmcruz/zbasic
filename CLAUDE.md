@@ -122,6 +122,14 @@ Each of these was a bug; the code comments carry the details and evidence.
   1-bit mask so drawing twice restores exactly (`paintXor`, `gfxTextXor`).
   FRAME/PAINT of rects, ovals and round rects use the pen.
 - **SELECT**: `CASE =x` is a case, not an assignment to a variable CASE.
+- **One cursor** for the whole emulated screen (`setMacCursor`): CURSOR,
+  INITCURSOR and SETCURSOR all set it, so a watch from `CURSOR 4` ends at
+  INITCURSOR. CURSOR n above 4 is CURS resource n (CDraw's magnifying glass,
+  the pointing hands); SETCURSOR takes a Cursor record — 16 words of image,
+  16 of mask, hot spot v then h. The mouse is tracked over the whole page.
+- **GET** takes a QuickDraw rectangle ((x2,y2) just outside, like BOX) and
+  leaves the bits in its array: two header words, then rows of whole 16-bit
+  words (`settleGet`, done lazily). MacPThy makes its tool cursors from them.
 - **SWAP** takes any two variables — MacPThy swaps arrays element by element.
 - **GETKEYS/BITTST**: the KeyMap bit of key k is bit k AND 7 of byte k\8
   (Shift is 56); BITTST reads memory high bit first.

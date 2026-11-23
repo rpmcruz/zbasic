@@ -25,7 +25,7 @@ statementWithProgress = s:statement
   { progressCallback(location().start.line, s); return s; }
 statement = comment { return null; }
   / inlineAsm
-  / declareStmt / defFn / definition / defCmd / typeBlock / dimVar / commonStmt / defTypeStmt / assignVar
+  / declareStmt / defFn / definition / defCmd / typeBlock / dimVar / commonStmt / defTypeStmt / cursorEq / assignVar
   / userProcCall / userFuncCall / userLongFuncDef / userLocalFuncDef / printStmt / pokeStmt / gotoStmt
   / eventLabel / sysFuncCall / dataStmt
   / includeStmt
@@ -40,6 +40,11 @@ inlineAsm = "`" code:(!newline .)*
   { return {type: "inlineAsm", code: code.map(c => c[1]).join("")}; }
 
 exprStmt = e:expression { return {type: "exprStmt", expr: e}; }
+
+// CURSOR[=] n — the Mac manual's form, which MacPThy writes as CURSOR=4. CURSOR
+// is a reserved word, never a variable.
+cursorEq = "CURSOR"i _ "=" _ e:expression
+  { return {type: "sysFuncCall", cmd: "CURSOR", chan: null, keyword: null, args: [e], trailer: []}; }
 
 gotoStmt = cmd:branchCmd ![a-zA-Z0-9_%&!$] __ target:labelRef
   { return {type: "sysFuncCall", cmd, keyword: null, args: [target]}; }

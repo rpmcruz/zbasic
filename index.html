@@ -367,7 +367,7 @@ body {
 
 <input type="file" id="file-input" style="display:none" webkitdirectory multiple>
 
-<script src="zbasic-compiled.js?v=2282f5ae93"></script>
+<script src="zbasic-compiled.js?v=7a6c364775"></script>
 <script>
 const parser = ZBasicParser;
 // Device pixels per window pixel in every canvas. It follows the size the
@@ -575,6 +575,7 @@ const isArrayAlias = v => typeof v === 'object' && v !== null;
 function slotGet(s, i) {
   if (!s.dims) return isArrayAlias(globalVars[s.name]) ? undefined : globalVars[s.name];
   let a = globalVars[arrKey(s.name)];
+  if (pendingGets.size) settleGet(a);
   for (const k of slotPath(s, i)) a = Array.isArray(a) ? a[k] : undefined;
   return a;
 }
@@ -582,6 +583,7 @@ function slotSet(s, i, v) {
   if (!s.dims) { if (!isArrayAlias(globalVars[s.name])) globalVars[s.name] = coerceVar(s.name, v); return; }
   const path = slotPath(s, i), last = path.pop();
   let a = globalVars[arrKey(s.name)];
+  if (pendingGets.size) settleGet(a);
   for (const k of path) a = Array.isArray(a) ? a[k] : undefined;
   if (Array.isArray(a)) a[last] = v;
 }
@@ -1199,7 +1201,11 @@ canvasWrapper.addEventListener('mousedown', e => {
   notePress(x, y, e.detail);
 });
 canvasWrapper.addEventListener('mouseup',   () => noteRelease());
-canvasWrapper.addEventListener('mousemove', e => { [mouseX, mouseY] = canvasCoords(e.clientX, e.clientY); });
+// The mouse is followed over the whole page, as the Mac knows where it is
+// anywhere on the screen. Followed only over the windows' area, it kept its
+// last place there while it went up to the menu bar, and MacPThy, which picks
+// its cursor by where the mouse is, kept its drawing-tool cursor up there.
+document.addEventListener('mousemove', e => { [mouseX, mouseY] = canvasCoords(e.clientX, e.clientY); });
 canvasWrapper.addEventListener('touchstart', e => {
   e.preventDefault();
   const t = e.touches[0];
@@ -2471,6 +2477,26 @@ async function writeWords(arg, env, words) {
     words.forEach((w, i) => { if (base + i < row.length) row[base + i] = w; });
   }
 }
+// The reverse: n words of a record that starts at the variable handed to the
+// Toolbox — consecutive array elements, or a run of DIMmed scalars.
+async function readWords(arg, env, count) {
+  if (!arg) return null;
+  if (arg.type === 'unary' && arg.operator === '@') return readWords(arg.expression, env, count);
+  const fill = vals => Array.from({length: count}, (_, i) => Math.floor(Number(vals[i])) || 0);
+  if (arg.type === 'variable') {
+    const grp = dimGroups[normVarName(arg.name)];
+    return grp ? fill(grp.map(n => readVar(env, n))) : null;
+  }
+  if (arg.type === 'callable') {
+    const arr = readArray(env, arg.name);
+    if (!Array.isArray(arr)) return null;
+    const idx = await Promise.all((arg.args ?? []).map(x => x ? evalExpr(x, env) : 0));
+    let row = arr, base = subIdx(idx[0] ?? 0);
+    if (idx.length > 1 && Array.isArray(arr[base])) { row = arr[base]; base = subIdx(idx[1]); }
+    return fill(row.slice(base, base + count));
+  }
+  return null;
+}
 // FN PTINRECT(pt, rect) — the point argument, not wherever the mouse is now.
 async function ptInRect(args, env) {
   const p = await readPoint(args?.[0], env);
@@ -2804,6 +2830,84 @@ function spriteAtScale(key) {
   dctx.drawImage(sp.canvas, 0, 0, dst.width, dst.height);
   return (spriteBuffer[key] = {...sp, canvas: dst, img: null, S: CANVAS_SCALE});
 }
+// GET also leaves the picture in its array, as ZBasic does: a header and then
+// the rows, one bit a pixel with ink set, each row a whole number of 16-bit
+// words, as a QuickDraw bitmap is. MacPThy builds its tool cursors out of
+// those words (`Cursr(1,I)=Screen(I+2)`), which shows the rows start at word
+// 2; what the two header words hold is not known, and the height and width
+// are put there. Working the bits out means reading the canvas, and MacPThy
+// snapshots its whole window into that same array on every pass of its loops,
+// so they are only worked out when the program next touches the array
+// (readArray, slotGet and slotSet call settleGet).
+const pendingGets = new Map();   // array → {sp, row, base, words}
+function settleGet(arr) {
+  const p = pendingGets.get(arr);
+  if (!p) return;
+  pendingGets.delete(arr);
+  const {sp, row, base} = p, img = spriteImage(sp), S = sp.S, perRow = Math.ceil(sp.w / 16);
+  const ink = (x, y) => {
+    const i = (Math.min(img.height - 1, Math.floor((y + 0.5) * S)) * img.width
+             + Math.min(img.width - 1, Math.floor((x + 0.5) * S))) * 4;
+    return img.data[i + 3] >= 128 && img.data[i] + img.data[i + 1] + img.data[i + 2] < 384;
+  };
+  const put = (k, w) => { if (base + k < row.length) row[base + k] = (w << 16) >> 16; };
+  put(0, sp.h); put(1, sp.w);
+  for (let y = 0; y < sp.h; y++)
+    for (let wd = 0; wd < perRow; wd++) {
+      let w = 0;
+      for (let b = 0; b < 16 && wd * 16 + b < sp.w; b++) if (ink(wd * 16 + b, y)) w |= 0x8000 >> b;
+      put(2 + y * perRow + wd, w);
+    }
+}
+
+// ── The cursor ──────────────────────────────────────────────
+// The Mac has one cursor, the same over every window and the desktop around
+// them, and CURSOR, INITCURSOR and SETCURSOR all change that one: a watch set
+// by CURSOR 4 is gone everywhere after INITCURSOR. It is shown over the
+// emulated screen (#program-view), not over the page's own toolbar.
+// CURSOR 0-4 are the arrow, I-beam, cross, plus and watch; any other number is
+// the CURS resource of that id — CDraw's 128 is the magnifying glass it shows
+// over a curve, and 1000 (CDraw, Grglflx) and 4000 (Supermarket) a pointing
+// hand for controls. SETCURSOR takes a Cursor record, the layout CURS
+// resources have too: 16 words of image, 16 of mask, and the hot spot as a
+// Point, v then h. MacPThy's tools have cursors made that way; the hot spot of
+// its axis tool, (1,14), is the corner of the axes it draws.
+const STD_CURSORS = ['default', 'text', 'crosshair', 'cell', 'wait'];
+let macCursor = 'default', cursorHidden = false;
+const cursorCache = new Map();
+function applyMacCursor() {
+  const el = document.getElementById('program-view');
+  if (el) el.style.cursor = cursorHidden ? 'none' : macCursor;
+}
+function setMacCursor(css) { macCursor = css; cursorHidden = false; applyMacCursor(); }
+// A Cursor record as a CSS cursor, drawn at the size the windows are shown at:
+// black where the image has ink, white where only the mask does.
+function cursorFromWords(words) {
+  const k = Math.max(1, Math.round(CANVAS_SCALE / (window.devicePixelRatio || 1)));
+  const key = k + ':' + words.join(',');
+  if (cursorCache.has(key)) return cursorCache.get(key);
+  let css = 'default';
+  try {
+    const c = newCanvas(16 * k, 16 * k), g = c.getContext('2d');
+    for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+      const bit = 0x8000 >> x, ink = words[y] & bit, mask = words[16 + y] & bit;
+      if (!ink && !mask) continue;
+      g.fillStyle = ink ? '#000' : '#fff';
+      g.fillRect(x * k, y * k, k, k);
+    }
+    const clamp = n => Math.min(15, Math.max(0, n | 0));
+    css = `url(${c.toDataURL()}) ${clamp(words[33]) * k} ${clamp(words[32]) * k}, default`;
+  } catch (e) { /* no canvas to draw it on */ }
+  cursorCache.set(key, css);
+  return css;
+}
+function cursorFromResource(id) {
+  const r = (macResources['CURS'] ?? []).find(r => r.id === id);
+  if (!r || r.data.length < 68) return 'default';
+  const d = new DataView(r.data.buffer, r.data.byteOffset, r.data.byteLength);
+  return cursorFromWords(Array.from({length: 34}, (_, i) => d.getInt16(i * 2)));
+}
+
 let textSize = 12, textX = 1, textY = 12, textFont = 3;  // 3 = Geneva
 let printWidth = 0;   // WIDTH statement: chars per line before auto CR/LF (0 = off)
 let printTab = 16;    // DEF TAB: column width used by "," between PRINT items
@@ -3306,6 +3410,7 @@ async function runProgram() {
   btnRun.textContent = 'Stop'; btnRun.classList.add('running');
 
   globalVars = {}; dataStore = []; dataPtr = 0; funcDefs = {};
+  pendingGets.clear(); setMacCursor('default');
   Object.keys(fnPtrTable).forEach(k => delete fnPtrTable[k]); nextFnPtrHandle = 1;
   executedGlobals.clear();
   destroyAllCtrls();
@@ -3478,6 +3583,7 @@ async function runProgram() {
   await closeAllFiles();   // a file the program left open still gets written
 
   running = false; stopRequested = false;
+  setMacCursor('default');   // a watch left up would claim the stopped program is busy
   btnRun.textContent = 'Run'; btnRun.classList.remove('running');
   // The menus belong to the run: left up, they could still be clicked and
   // did nothing. The windows stay, showing how the program left them.
@@ -3888,12 +3994,17 @@ function collectTypes(stmts, state = {record: null}) {
 // directly keep working.
 const arrKey = n => n + '()';
 
-function readArray(env, name) {
+function lookupArray(env, name) {
   const k = arrKey(normVarName(name));
   const a = env[k] ?? globalVars[k];
   if (Array.isArray(a)) return a;
   const v = readVar(env, name);
   return Array.isArray(v) ? v : undefined;
+}
+function readArray(env, name) {
+  const a = lookupArray(env, name);
+  if (a && pendingGets.size) settleGet(a);
+  return a;
 }
 
 function defineArray(env, name, arr) {
@@ -4534,7 +4645,11 @@ async function execSysCall(stmt, env) {
       // PG:PRO's pGgetWTitle takes as "no window title to read".
       if (stmt.keyword === 'WINDOW') { if (args[1]?.name) await storeInto(args[1], 0, env); return; }
       if (stmt.keyword) { console.log(`unsupported: GET ${stmt.keyword}`); return; }
-      // GET (x1,y1)-(x2,y2), ArrayName(index) — capture screen region to sprite buffer
+      // GET (x1,y1)-(x2,y2), ArrayName(index) — capture screen region to sprite buffer.
+      // The rectangle is QuickDraw's, (x2,y2) just outside it, as BOX's is.
+      // MacPThy GETs (130,140)-(146,156) and the like for its 16-pixel cursors,
+      // whose rows are one word each, and Supermarket GETs a shopper's picture
+      // as (1,1)-(1+width,1+height).
       if (!ctx) return;
       const a0 = args[0], a1 = args[1];
       if (!a0 || !a1) return;
@@ -4542,23 +4657,36 @@ async function execSysCall(stmt, env) {
       const x1 = Math.floor(Number(await ev(a0.from?.[0]))), y1 = Math.floor(Number(await ev(a0.from?.[1])));
       const x2 = Math.floor(Number(await ev(a0.to?.[0]))),  y2 = Math.floor(Number(await ev(a0.to?.[1])));
       const sx = Math.min(x1, x2), sy = Math.min(y1, y2);
-      const w = Math.abs(x2 - x1) + 1, h = Math.abs(y2 - y1) + 1;
+      const w = Math.abs(x2 - x1), h = Math.abs(y2 - y1);
+      if (!w || !h) return;
       if (a1.type === 'callable' || a1.type === 'variable') {
-        const idx = a1.args?.[0] ? Math.floor(Number(await evalExpr(a1.args[0], env))) : 0;
-        const key = `${a1.name}_${idx}`, prev = spriteBuffer[key];
+        const idx = await Promise.all((a1.args ?? []).map(x => x ? evalExpr(x, env) : 0));
+        const key = `${a1.name}_${Math.floor(Number(idx[0] ?? 0))}`, prev = spriteBuffer[key];
+        // Where the words go: the array, or the row of it a second subscript picks.
+        const arr = lookupArray(env, a1.name);
+        let row = arr, base = subIdx(idx[0] ?? 0);
+        if (arr && idx.length > 1 && Array.isArray(arr[base])) { row = arr[base]; base = subIdx(idx[1]); }
+        const words = 2 + h * Math.ceil(w / 16);
+        // A picture still waiting to be unpacked into this array: unpack it
+        // first, unless this one covers all of its words.
+        const old = arr && pendingGets.get(arr);
+        if (old && !(old.row === row && old.base === base && old.words <= words)) settleGet(arr);
         // Nothing drawn since this buffer last took the same rectangle: it
         // already holds the picture. MacPThy's FN Photo snapshots the whole
         // window on every pass of its mouse-polling loops — some seventy times
         // per mouse step while a line is dragged — which at screen resolution
         // took a third of a second each step.
-        if (prev && prev.ctx === ctx && prev.drawn === ctx.drawn && prev.at === `${sx},${sy},${w},${h}` && prev.S === CANVAS_SCALE) return;
-        const x0 = dev(sx), y0 = dev(sy), dw = dev(sx + w) - x0, dh = dev(sy + h) - y0;
-        const buf = prev?.canvas?.width === dw && prev.canvas.height === dh ? prev.canvas : newCanvas(dw, dh);
-        const bc = buf.getContext('2d', {willReadFrequently: true});
-        bc.globalCompositeOperation = 'copy';
-        bc.drawImage(ctx.canvas, x0, y0, dw, dh, 0, 0, dw, dh);
-        spriteBuffer[key] = {canvas: buf, img: null, w, h, S: CANVAS_SCALE,
-                             ctx, drawn: ctx.drawn, at: `${sx},${sy},${w},${h}`};
+        let sp = prev;
+        if (!(prev && prev.ctx === ctx && prev.drawn === ctx.drawn && prev.at === `${sx},${sy},${w},${h}` && prev.S === CANVAS_SCALE)) {
+          const x0 = dev(sx), y0 = dev(sy), dw = dev(sx + w) - x0, dh = dev(sy + h) - y0;
+          const buf = prev?.canvas?.width === dw && prev.canvas.height === dh ? prev.canvas : newCanvas(dw, dh);
+          const bc = buf.getContext('2d', {willReadFrequently: true});
+          bc.globalCompositeOperation = 'copy';
+          bc.drawImage(ctx.canvas, x0, y0, dw, dh, 0, 0, dw, dh);
+          sp = spriteBuffer[key] = {canvas: buf, img: null, w, h, S: CANVAS_SCALE,
+                                    ctx, drawn: ctx.drawn, at: `${sx},${sy},${w},${h}`};
+        }
+        if (Array.isArray(row)) pendingGets.set(arr, {sp, row, base, words});
       }
       return;
     }
@@ -5347,10 +5475,9 @@ async function execSysCall(stmt, env) {
     }
 
     case 'CURSOR': {
-      // 0 normal, 1 text (I-beam), 2 selection cross, 3 "excell" cross, 4 watch
-      const cursorMap = {0: 'default', 1: 'text', 2: 'crosshair', 3: 'cell', 4: 'wait', 5: 'wait'};
-      const val = args.length > 0 ? await n(0) : 0;
-      document.body.style.cursor = cursorMap[val] ?? 'default';
+      // 0 arrow, 1 I-beam, 2 cross, 3 plus, 4 watch; else a CURS resource (see setMacCursor).
+      const val = args[0] ? Math.floor(await n(0)) : 0;
+      setMacCursor(STD_CURSORS[val] ?? cursorFromResource(val));
       return;
     }
 
@@ -5588,29 +5715,16 @@ async function execProcCall(stmt, env) {
       return;
     }
     // ── Cursor ───────────────────────────────────────────────────
-    case 'initcursor': {
-      const w = canvas || document.getElementById('canvas-wrapper');
-      if (w) w.style.cursor = 'default';
-      return;
-    }
+    case 'initcursor': setMacCursor('default'); return;
+    // SETCURSOR(record) — a Cursor record, which MacPThy keeps in a row of an
+    // integer array: CALL SETCURSOR(Cursr(D1,0)).
     case 'setcursor': {
-      const cursors = ['default','text','crosshair','cell','wait','pointer'];
-      const idx = Math.floor(Number(await ev(0))) || 0;
-      const cur = cursors[idx] ?? 'default';
-      const w = canvas || document.getElementById('canvas-wrapper');
-      if (w) w.style.cursor = cur;
+      const words = await readWords(stmt.args?.[0], env, 34);
+      setMacCursor(words ? cursorFromWords(words) : 'default');
       return;
     }
-    case 'showcursor': {
-      const w = canvas || document.getElementById('canvas-wrapper');
-      if (w) w.style.cursor = 'default';
-      return;
-    }
-    case 'hidecursor': {
-      const w = canvas || document.getElementById('canvas-wrapper');
-      if (w) w.style.cursor = 'none';
-      return;
-    }
+    case 'showcursor': cursorHidden = false; applyMacCursor(); return;
+    case 'hidecursor': cursorHidden = true; applyMacCursor(); return;
     case 'getmouse': {
       // CALL GETMOUSE(pt) — the mouse position as a Point (v, h). CDraw passes
       // `My` from `DIM My,Mx`; packing both into My left Mx stale, so the
